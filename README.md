@@ -2,103 +2,69 @@
   <img src="docs/logo.png" alt="Easy Git logo" width="128" height="128">
 </p>
 
-# Easy Git
+<h1 align="center">Easy Git</h1>
 
-A secure, plug-and-play way to sync individual Obsidian vault folders (or sections of them) with GitHub. Works with private repos, supports multiple folder mappings, bidirectional sync, and prompts you on conflicts.
+<p align="center">
+  A secure, plug-and-play way to sync individual Obsidian vault folders with GitHub.<br>
+  Private repos, multiple folder mappings, push/pull/bidirectional, prompt-on-conflict.
+</p>
 
-## Features
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Easy Git settings panel" width="640">
+</p>
 
-- **Multiple folder mappings**. Pair any vault folder with any folder in any repo. Different local and remote names are fine.
-- **Private repos**. Authenticate with a Personal Access Token or GitHub Device Flow OAuth.
-- **Per-mapping direction**. Push only, pull only, or bidirectional.
-- **Clean commits**. Each sync is one atomic commit via GitHub's Git Data API. The latest remote ref is always fetched before the commit is built, so non-fast-forward pushes are retried instead of clobbered.
-- **Prompt on conflicts**. When the same file changed on both sides, you choose: keep local, keep remote, or keep both.
-- **Auto modes**: off, on interval, on Obsidian startup, or on file save (debounced).
-- **Mobile compatible**. Uses only Obsidian's Vault API and `requestUrl`, so no shell access is needed.
+## Why
 
-## Install via BRAT
+Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where you want to share only one or two folders with a repo: a notes folder you keep public, course material you collaborate on, a snippets section you want backed up under version control. You pick the folder, you pick the repo, you pick the direction. That's it.
+
+## Install
+
+**Via BRAT** (recommended while the community-plugin submission is in review)
 
 1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin.
-2. In BRAT settings, click **Add Beta Plugin**.
-3. Paste this repository URL: `https://github.com/Saiki77/Easy-Git`
-4. Enable **Easy Git** under Settings → Community plugins.
+2. BRAT settings → **Add Beta Plugin** → paste `Saiki77/Easy-Git`.
+3. Enable **Easy Git** under Settings → Community plugins.
 
-## Manual install
+**Manual:** download `main.js`, `manifest.json`, `styles.css` from the [latest release](../../releases) into `<your vault>/.obsidian/plugins/easy-git/`.
 
-Download `main.js`, `manifest.json`, and `styles.css` from the latest [release](../../releases) and drop them into `<your vault>/.obsidian/plugins/easy-git/`.
+## Sign in
 
-## Authentication
+Either works for private repos.
 
-Two options. Both work for private repos.
+- **Personal Access Token.** Create one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope (or a fine-grained token with `Contents: Read and write` + `Metadata: Read`), paste it in settings, hit **Test connection**.
+- **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically.
 
-### Personal Access Token (simplest)
+## Add a folder mapping
 
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens) and create a token.
-   - Classic: enable the `repo` scope.
-   - Fine-grained: select your target repos, grant `Contents: Read and write` and `Metadata: Read`.
-2. Paste it into **Easy Git → GitHub Authentication → Personal access token**.
-3. Click **Test connection** to verify.
+Settings → Easy Git → **+ Add mapping**. Pick the vault folder, the repo, the branch, the path inside the repo, the direction (push only, pull only, or both), and how often to sync (manual, on interval, on startup, or on save). Save.
 
-### GitHub Device Flow (no copy-paste)
+After that, sync from the ribbon menu, the command palette (`Easy Git: Sync mapping…`), or the **Sync** button next to each mapping.
 
-Click **Sign in** under **Sign in with GitHub (Device Flow)**, then enter the code on the GitHub page that opens. The plugin polls until the token is issued.
+## Conflicts
 
-## Adding a mapping
+If the same file changed on both sides since the last sync, Easy Git pauses and lets you pick **keep local**, **keep remote**, or **keep both** (renames your local copy with a `-conflict-local-<timestamp>` suffix so neither side is lost). Cancelling the conflict modal aborts the entire run without touching anything.
 
-1. Open **Settings → Easy Git**.
-2. Under **Folder mappings**, click **+ Add mapping**.
-3. Fill in:
-   - **Name**: display label.
-   - **Vault folder**: folder in your vault.
-   - **Repository**: your GitHub repo (loaded from your account).
-   - **Branch**: the branch to commit to.
-   - **Remote folder path**: folder inside the repo (empty = repo root).
-   - **Direction**: push only, pull only, or bidirectional.
-   - **Auto mode**: off (manual), interval, startup, or on-save.
-   - **Commit message template**: optional override of the global default.
-4. Click **Save**.
+## How sync works under the hood
 
-Trigger a sync via the ribbon icon (Git branch icon, opens a quick menu), the command palette (`Easy Git: Sync all mappings`, `Sync mapping…`, `Push mapping…`, `Pull mapping…`), or the **Sync** button next to each mapping in settings.
+Each run produces one atomic commit via GitHub's Git Data API: blob → tree (with `base_tree` so unrelated files in the repo are preserved) → commit → ref update. The branch's current HEAD is fetched right before the commit is built, and the ref update is non-fast-forward-protected, so if someone else pushes mid-run the sync retries from scratch (up to 3×, 1s/3s/9s backoff) instead of clobbering.
 
-## Conflict resolution
+File identity is the git blob SHA-1 (matches `git hash-object`), so we compare local and remote without round-tripping content.
 
-When the same file changed on both sides since the last sync, Easy Git pauses and shows a modal listing each conflict. For each one you choose:
+## Defaults
 
-- **Keep local**: your version wins; the remote version is overwritten.
-- **Keep remote**: the remote version wins; your local file is overwritten.
-- **Keep both**: your local file is renamed (suffix `-conflict-local-<timestamp>`), and both versions end up on both sides.
+- Excluded: `.obsidian/**`, `.trash/**`, `.git/**`, `node_modules/**` (editable in settings).
+- Files over 95 MB are skipped (GitHub's blob limit is 100 MB).
+- Authenticated rate limit headroom is checked before each run.
+- Mobile compatible: no shell access, no node-only modules.
 
-If you cancel the modal, the entire sync run is aborted. Nothing is committed and nothing is pulled. Your files stay where they are.
-
-## Excluded paths
-
-`.obsidian/**`, `.trash/**`, `.git/**`, and `node_modules/**` are excluded by default. You can edit the exclusion list in settings, one glob per line. Patterns are matched against the vault-relative path.
-
-## Limits and edge cases
-
-- **File size**. Files over 95 MB are skipped by default (GitHub's blob API caps at 100 MB). Adjustable in settings.
-- **Folder size**. Up to ~10,000 files per mapping is comfortable. The GitHub tree API truncates beyond ~100k entries.
-- **Renames**. Treated as delete-plus-add at the GitHub layer (the file's history won't follow). Git's own rename detection is a UI-layer thing; the underlying objects don't move.
-- **Binary files**. Detected by extension; PNGs, PDFs, etc. round-trip cleanly via base64.
-- **Rate limits**. 5,000 req/hour authenticated. A 50-file sync uses ~55 requests. The plugin reads `x-ratelimit-remaining` and surfaces a Notice when running low.
-- **Race conditions**. If someone pushes to the same branch during your sync, the ref update is rejected as non-fast-forward and the sync retries from scratch up to 3 times.
-
-## Build and release
+## Build from source
 
 ```sh
 npm install
-npm run dev      # watch mode
-npm run build    # production build, type-check + minify
+npm run build
 ```
 
-Cutting a release:
-
-```sh
-npm version patch    # bumps manifest.json + versions.json + package.json
-git push --follow-tags
-```
-
-The GitHub Actions workflow at `.github/workflows/release.yml` builds and uploads `main.js`, `manifest.json`, `styles.css` to the new release.
+`main.js` is the bundled output. The release workflow at `.github/workflows/release.yml` builds and uploads `main.js` + `manifest.json` + `styles.css` on tag push.
 
 ## License
 
