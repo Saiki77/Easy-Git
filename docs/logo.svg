@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Easy Git logo">
+  <title>Easy Git</title>
+  <rect width="256" height="256" rx="48" fill="#7c3aed"/>
+
+  <!-- Folder tab -->
+  <rect x="44" y="118" width="84" height="22" rx="6" fill="#FFFFFF"/>
+
+  <!-- Folder body -->
+  <rect x="44" y="134" width="168" height="92" rx="14" fill="#FFFFFF"/>
+
+  <!-- Git branch: trunk + fork emerging from the top of the folder -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="152" y1="134" x2="152" y2="56"/>
+    <path d="M 152 92 Q 152 56 188 56"/>
+  </g>
+
+  <!-- Commit nodes -->
+  <circle cx="152" cy="56" r="13" fill="#FFFFFF"/>
+  <circle cx="188" cy="56" r="13" fill="#FFFFFF"/>
+  <circle cx="152" cy="92" r="8" fill="#7c3aed" stroke="#FFFFFF" stroke-width="4"/>
+</svg>
