@@ -4,7 +4,7 @@
 
 # Easy Git
 
-Sync vault folders with GitHub repositories — works with private repos, supports multiple folder mappings, bidirectional sync, and prompts you on conflicts.
+A secure, plug-and-play way to sync individual Obsidian vault folders (or sections of them) with GitHub. Works with private repos, supports multiple folder mappings, bidirectional sync, and prompts you on conflicts.
 
 ## Features
 
