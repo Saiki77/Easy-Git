@@ -2,6 +2,11 @@
   <img src="docs/screenshots/marketing-1-hero.png" alt="Easy Git — sync Obsidian folders to GitHub" width="100%">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/demo.gif" alt="End-to-end: open Settings, add a mapping, pick the repo, save, sync" width="960">
+</p>
+<p align="center"><sub>End-to-end: open Settings, add a mapping, pick the repo, save, sync. <a href="docs/screenshots/demo.mp4">(MP4)</a></sub></p>
+
 <table>
   <tr>
     <td align="center" width="33%">
@@ -18,11 +23,6 @@
     </td>
   </tr>
 </table>
-
-<p align="center">
-  <img src="docs/screenshots/demo.gif" alt="End-to-end: open Settings, add a mapping, pick the repo, save, sync" width="960">
-</p>
-<p align="center"><sub>End-to-end: open Settings, add a mapping, pick the repo, save, sync. <a href="docs/screenshots/demo.mp4">(MP4)</a></sub></p>
 
 ## Why
 
