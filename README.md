@@ -26,6 +26,13 @@
   </tr>
 </table>
 
+<p align="center">
+  <video src="docs/screenshots/demo.mp4" controls muted playsinline width="960" poster="docs/screenshots/demo-poster.png">
+    <a href="docs/screenshots/demo.mp4"><img src="docs/screenshots/demo-poster.png" alt="Watch the demo" width="960"></a>
+  </video>
+</p>
+<p align="center"><sub>End-to-end: open Settings, add a mapping, pick the repo, save, sync.</sub></p>
+
 ## Why
 
 Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where you want to share only one or two folders with a repo: a notes folder you keep public, course material you collaborate on, a snippets section you want backed up under version control. You pick the folder, you pick the repo, you pick the direction. That's it.
