@@ -1,5 +1,19 @@
 /* Easy Git plugin styles */
 
+.easy-git-status-bar {
+  color: var(--text-muted);
+}
+.easy-git-status-bar.is-syncing {
+  color: #7c3aed;
+}
+.easy-git-status-bar.is-error {
+  color: var(--text-error);
+}
+.easy-git-status-bar:hover {
+  color: var(--text-normal);
+}
+
+
 .easy-git-mapping-row {
   display: flex;
   align-items: center;

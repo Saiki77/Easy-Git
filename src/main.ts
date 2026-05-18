@@ -17,6 +17,7 @@ import { EasyGitSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
 import { MappingNameSuggest } from "./ui/pickers";
+import { StatusBarIndicator, StatusState } from "./ui/status-bar";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
@@ -36,6 +37,7 @@ export default class EasyGitPlugin extends Plugin {
   private renameListener?: EventRef;
   private syncing: Set<string> = new Set();
   private pendingAfterSync: Set<string> = new Set();
+  private statusBar?: StatusBarIndicator;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -100,10 +102,44 @@ export default class EasyGitPlugin extends Plugin {
       },
     });
 
+    // Status bar indicator — shows aggregate sync state, clicks to open settings.
+    this.statusBar = new StatusBarIndicator(
+      this.addStatusBarItem(),
+      () => this.computeStatusState(),
+      () => this.openEasyGitSettings(),
+    );
+    this.statusBar.startTicker(this);
+
     this.app.workspace.onLayoutReady(() => {
       this.refreshAutoSyncWiring();
       this.runStartupSyncs();
+      this.statusBar?.refresh();
     });
+  }
+
+  private computeStatusState(): StatusState {
+    const mappings = this.settings?.mappings ?? [];
+    const anySyncing = this.syncing.size > 0;
+    const anyErrored = mappings.some((m) => !!m.lastSyncError);
+    let mostRecentSync: number | undefined;
+    for (const m of mappings) {
+      if (m.lastSyncAt && (!mostRecentSync || m.lastSyncAt > mostRecentSync)) {
+        mostRecentSync = m.lastSyncAt;
+      }
+    }
+    return {
+      hasMappings: mappings.length > 0,
+      anySyncing,
+      anyErrored,
+      mostRecentSync,
+    };
+  }
+
+  private openEasyGitSettings(): void {
+    // @ts-expect-error setting is private but accessible at runtime
+    this.app.setting.open();
+    // @ts-expect-error setting is private but accessible at runtime
+    this.app.setting.openTabById(this.manifest.id);
   }
 
   onunload(): void {
@@ -158,6 +194,8 @@ export default class EasyGitPlugin extends Plugin {
     if (needVaultListeners) {
       this.registerVaultListeners();
     }
+
+    this.statusBar?.refresh();
   }
 
   private runStartupSyncs(): void {
@@ -215,6 +253,7 @@ export default class EasyGitPlugin extends Plugin {
       return;
     }
     this.syncing.add(id);
+    this.statusBar?.refresh();
     try {
       if (this.settings.debugLogging) {
         console.log(`[Easy Git] sync start (${trigger}) — ${mapping.name}`);
@@ -255,6 +294,7 @@ export default class EasyGitPlugin extends Plugin {
       }
     } finally {
       this.syncing.delete(id);
+      this.statusBar?.refresh();
       if (this.pendingAfterSync.has(id)) {
         this.pendingAfterSync.delete(id);
         // schedule another run on a microtask so we don't recurse the stack

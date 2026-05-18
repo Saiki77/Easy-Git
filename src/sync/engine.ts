@@ -298,7 +298,12 @@ export class SyncEngine {
     const folder = this.deps.app.vault.getFolderByPath(mapping.vaultFolder);
     const files: Record<string, LocalFileEntry> = {};
     const skipped: string[] = [];
-    const excludePatterns = this.deps.settings.excludedPaths;
+    const localIgnore = await this.loadLocalIgnore(mapping);
+    const excludePatterns = [
+      ".easygitignore",
+      ...this.deps.settings.excludedPaths,
+      ...localIgnore,
+    ];
     const maxBytes = this.deps.settings.maxFileSizeBytes;
 
     this.rewriteContentCache = new Map();
@@ -396,6 +401,24 @@ export class SyncEngine {
       unresolvedWikilinks,
       rewrittenWikilinks,
     };
+  }
+
+  /**
+   * Read a `.easygitignore` file at the root of the mapping's vault folder.
+   * Returns an array of pattern strings (with comments and blank lines preserved
+   * — `isExcluded` already strips them). Returns [] if the file doesn't exist.
+   */
+  private async loadLocalIgnore(mapping: FolderMapping): Promise<string[]> {
+    const folder = mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
+    const path = folder ? `${folder}/.easygitignore` : ".easygitignore";
+    const file = this.deps.app.vault.getFileByPath(path);
+    if (!file) return [];
+    try {
+      const text = await this.deps.app.vault.read(file);
+      return text.split(/\r?\n/);
+    } catch {
+      return [];
+    }
   }
 
   private makeResolver(): WikilinkResolver {

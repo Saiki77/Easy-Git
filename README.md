@@ -79,6 +79,21 @@ File identity is the git blob SHA-1 (matches `git hash-object`), so we compare l
 - Authenticated rate limit headroom is checked before each run.
 - Mobile compatible: no shell access, no node-only modules.
 
+## Per-mapping `.easygitignore`
+
+Drop a `.easygitignore` file at the root of any mapping's vault folder and its patterns are added on top of the global excludes for that mapping only. Same syntax as the global list: one glob per line, `#` for comments, blank lines ignored. Useful when you want to exclude `*.pdf` in one mapping but not another. The `.easygitignore` file itself is never pushed.
+
+## Status bar
+
+A small indicator sits in Obsidian's bottom-right status bar showing the aggregate sync state across all mappings:
+
+- `↻ Ready` — at least one mapping configured, nothing has synced yet
+- `↻ Synced 5m ago` — last successful sync (most recent across mappings)
+- `↻ Syncing…` — a sync is in progress
+- `! Easy Git error` — at least one mapping has an unresolved error
+
+Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
+
 ## Permissions
 
 - **Clipboard**: written to only by the **Sign in with GitHub** button, which copies the one-time device code so you can paste it on github.com. No clipboard reads anywhere.
