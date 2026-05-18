@@ -9,18 +9,12 @@
 
 <table>
   <tr>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/settings.png" alt="Easy Git settings panel" width="100%"><br>
-      <sub><b>Settings.</b> Sign in, list mappings, sync each one.</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/repo-picker.png" alt="Repository picker" width="100%"><br>
-      <sub><b>Pick a repo.</b> Any you have access to, public or private.</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/screenshots/mapping-modal.png" alt="Edit folder mapping" width="100%"><br>
-      <sub><b>Configure.</b> Vault folder, branch, remote path, direction.</sub>
-    </td>
+    <td width="50%"><img src="docs/screenshots/marketing-2-pick.png" alt="Any folder. Any repo." width="100%"></td>
+    <td width="50%"><img src="docs/screenshots/marketing-3-direction.png" alt="Push, pull, or both." width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/marketing-4-auth.png" alt="Sign in once. Sync forever." width="100%"></td>
+    <td width="50%"><img src="docs/screenshots/marketing-5-wikilinks.png" alt="Wikilinks on GitHub." width="100%"></td>
   </tr>
 </table>
 
