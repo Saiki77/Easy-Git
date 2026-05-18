@@ -1,12 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Easy Git logo" width="128" height="128">
-</p>
-
-<h1 align="center">Easy Git</h1>
-
-<p align="center">
-  A secure, plug-and-play way to sync individual Obsidian vault folders with GitHub.<br>
-  Private repos, multiple folder mappings, push/pull/bidirectional, prompt-on-conflict.
+  <img src="docs/screenshots/hero.png" alt="Easy Git — sync Obsidian folders to GitHub" width="100%">
 </p>
 
 <table>
