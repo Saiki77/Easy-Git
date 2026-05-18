@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Easy Git logo" width="128" height="128">
+</p>
+
 # Easy Git
 
 Sync vault folders with GitHub repositories — works with private repos, supports multiple folder mappings, bidirectional sync, and prompts you on conflicts.
@@ -39,8 +43,6 @@ Two options. Both work for private repos.
 
 Click **Sign in** under **Sign in with GitHub (Device Flow)**, then enter the code on the GitHub page that opens. The plugin polls until the token is issued.
 
-> Device Flow requires an OAuth App `client_id` baked into the plugin. The default `client_id` placeholder will need to be replaced with a real one before this works — see [Configuring Device Flow](#configuring-device-flow) below.
-
 ## Adding a mapping
 
 1. Open **Settings → Easy Git**.
@@ -67,19 +69,6 @@ When the same file changed on both sides since the last sync, Easy Git pauses an
 - **Keep both** — your local file is renamed (suffix `-conflict-local-<timestamp>`), and both versions end up on both sides.
 
 If you cancel the modal, the entire sync run is aborted — nothing is committed and nothing is pulled. Your files stay where they are.
-
-## Configuring Device Flow
-
-To enable the **Sign in with GitHub** button, register a GitHub OAuth App and edit one constant in source:
-
-1. Go to [github.com/settings/developers](https://github.com/settings/developers) → **OAuth Apps** → **New OAuth App**.
-2. Fill in any name, homepage, and an authorization callback (any URL — Device Flow doesn't use it).
-3. Enable Device Flow on the resulting app's settings page.
-4. Copy the **Client ID**.
-5. In this repo, edit `src/types.ts` and replace `EASY_GIT_OAUTH_CLIENT_ID` with your client ID.
-6. Rebuild (`npm run build`) and re-release.
-
-The client ID is public information; Device Flow does not use a client secret. Anyone using your plugin authorizes against your OAuth App, which only grants the scopes they approve at sign-in time.
 
 ## Excluded paths
 
