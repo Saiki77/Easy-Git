@@ -1,6 +1,6 @@
 {
   "name": "easy-git",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A secure, plug-and-play way to sync individual vault folders or sections with GitHub.",
   "main": "main.js",
   "scripts": {
