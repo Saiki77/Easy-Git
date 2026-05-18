@@ -27,11 +27,9 @@
 </table>
 
 <p align="center">
-  <video src="docs/screenshots/demo.mp4" controls muted playsinline width="960" poster="docs/screenshots/demo-poster.png">
-    <a href="docs/screenshots/demo.mp4"><img src="docs/screenshots/demo-poster.png" alt="Watch the demo" width="960"></a>
-  </video>
+  <img src="docs/screenshots/demo.gif" alt="End-to-end: open Settings, add a mapping, pick the repo, save, sync" width="960">
 </p>
-<p align="center"><sub>End-to-end: open Settings, add a mapping, pick the repo, save, sync.</sub></p>
+<p align="center"><sub>End-to-end: open Settings, add a mapping, pick the repo, save, sync. <a href="docs/screenshots/demo.mp4">(MP4)</a></sub></p>
 
 ## Why
 
