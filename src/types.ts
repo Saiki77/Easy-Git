@@ -135,7 +135,7 @@ export interface BranchSummary {
   commitSha: string;
 }
 
-export const EASY_GIT_OAUTH_CLIENT_ID = "Ov23liEasyGitPlaceholder";
+export const EASY_GIT_OAUTH_CLIENT_ID = "Ov23lihov6s6zVguusXe";
 
 export const GITHUB_API_BASE = "https://api.github.com";
 
