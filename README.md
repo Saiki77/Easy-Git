@@ -13,8 +13,8 @@ A secure, plug-and-play way to sync individual Obsidian vault folders (or sectio
 - **Per-mapping direction**. Push only, pull only, or bidirectional.
 - **Clean commits**. Each sync is one atomic commit via GitHub's Git Data API. The latest remote ref is always fetched before the commit is built, so non-fast-forward pushes are retried instead of clobbered.
 - **Prompt on conflicts**. When the same file changed on both sides, you choose: keep local, keep remote, or keep both.
-- **Auto modes**: off / on interval / on Obsidian startup / on file save (debounced).
-- **Mobile compatible**. Uses only Obsidian's Vault API and `requestUrl` — no shell access needed.
+- **Auto modes**: off, on interval, on Obsidian startup, or on file save (debounced).
+- **Mobile compatible**. Uses only Obsidian's Vault API and `requestUrl`, so no shell access is needed.
 
 ## Install via BRAT
 
@@ -48,14 +48,14 @@ Click **Sign in** under **Sign in with GitHub (Device Flow)**, then enter the co
 1. Open **Settings → Easy Git**.
 2. Under **Folder mappings**, click **+ Add mapping**.
 3. Fill in:
-   - **Name** — display label.
-   - **Vault folder** — folder in your vault.
-   - **Repository** — your GitHub repo (loaded from your account).
-   - **Branch** — the branch to commit to.
-   - **Remote folder path** — folder inside the repo (empty = repo root).
-   - **Direction** — push only, pull only, or bidirectional.
-   - **Auto mode** — off (manual), interval, startup, or on-save.
-   - **Commit message template** — optional override of the global default.
+   - **Name**: display label.
+   - **Vault folder**: folder in your vault.
+   - **Repository**: your GitHub repo (loaded from your account).
+   - **Branch**: the branch to commit to.
+   - **Remote folder path**: folder inside the repo (empty = repo root).
+   - **Direction**: push only, pull only, or bidirectional.
+   - **Auto mode**: off (manual), interval, startup, or on-save.
+   - **Commit message template**: optional override of the global default.
 4. Click **Save**.
 
 Trigger a sync via the ribbon icon (Git branch icon, opens a quick menu), the command palette (`Easy Git: Sync all mappings`, `Sync mapping…`, `Push mapping…`, `Pull mapping…`), or the **Sync** button next to each mapping in settings.
@@ -64,15 +64,15 @@ Trigger a sync via the ribbon icon (Git branch icon, opens a quick menu), the co
 
 When the same file changed on both sides since the last sync, Easy Git pauses and shows a modal listing each conflict. For each one you choose:
 
-- **Keep local** — your version wins; the remote version is overwritten.
-- **Keep remote** — the remote version wins; your local file is overwritten.
-- **Keep both** — your local file is renamed (suffix `-conflict-local-<timestamp>`), and both versions end up on both sides.
+- **Keep local**: your version wins; the remote version is overwritten.
+- **Keep remote**: the remote version wins; your local file is overwritten.
+- **Keep both**: your local file is renamed (suffix `-conflict-local-<timestamp>`), and both versions end up on both sides.
 
-If you cancel the modal, the entire sync run is aborted — nothing is committed and nothing is pulled. Your files stay where they are.
+If you cancel the modal, the entire sync run is aborted. Nothing is committed and nothing is pulled. Your files stay where they are.
 
 ## Excluded paths
 
-`.obsidian/**`, `.trash/**`, `.git/**`, and `node_modules/**` are excluded by default. You can edit the exclusion list in settings — one glob per line. Patterns are matched against the vault-relative path.
+`.obsidian/**`, `.trash/**`, `.git/**`, and `node_modules/**` are excluded by default. You can edit the exclusion list in settings, one glob per line. Patterns are matched against the vault-relative path.
 
 ## Limits and edge cases
 
