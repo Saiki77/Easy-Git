@@ -1,0 +1,10 @@
+{
+  "id": "easy-git",
+  "name": "Easy Git",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Sync vault folders with GitHub repositories. Private repos, multiple folder mappings, bidirectional sync, conflict resolution.",
+  "author": "Saiki77",
+  "authorUrl": "https://github.com/Saiki77",
+  "isDesktopOnly": false
+}

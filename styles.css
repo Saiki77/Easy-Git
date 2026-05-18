@@ -1,0 +1,137 @@
+/* Easy Git plugin styles */
+
+.easy-git-mapping-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+
+.easy-git-mapping-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.easy-git-mapping-name {
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 0.15rem;
+}
+
+.easy-git-mapping-summary {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.easy-git-mapping-status {
+  font-size: 0.8em;
+  color: var(--text-faint);
+  margin-top: 0.15rem;
+}
+
+.easy-git-mapping-status.is-error {
+  color: var(--text-error);
+}
+
+.easy-git-mapping-status.is-syncing {
+  color: var(--text-accent);
+}
+
+.easy-git-mapping-actions {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.easy-git-direction-icon {
+  font-size: 1.1em;
+  margin-right: 0.25rem;
+  color: var(--text-muted);
+}
+
+.easy-git-add-button {
+  margin-top: 0.5rem;
+}
+
+.easy-git-conflict-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.easy-git-conflict-row {
+  padding: 0.5rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  background-color: var(--background-secondary);
+}
+
+.easy-git-conflict-path {
+  font-family: var(--font-monospace);
+  font-weight: 600;
+  color: var(--text-normal);
+  word-break: break-all;
+}
+
+.easy-git-conflict-kind {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin: 0.15rem 0 0.5rem;
+}
+
+.easy-git-conflict-choices {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.easy-git-conflict-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.easy-git-device-code {
+  font-family: var(--font-monospace);
+  font-size: 1.6em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-align: center;
+  padding: 0.75rem;
+  margin: 1rem 0;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  user-select: all;
+}
+
+.easy-git-device-status {
+  text-align: center;
+  color: var(--text-muted);
+  margin-top: 1rem;
+}
+
+.easy-git-modal-form .setting-item {
+  border-top: none;
+  padding: 0.5rem 0;
+}
+
+.easy-git-picker-button {
+  min-width: 12rem;
+  text-align: left;
+}
+
+.easy-git-picker-button .easy-git-picker-placeholder {
+  color: var(--text-faint);
+  font-style: italic;
+}

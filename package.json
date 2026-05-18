@@ -1,0 +1,26 @@
+{
+  "name": "easy-git",
+  "version": "0.1.0",
+  "description": "Sync vault folders with GitHub repositories.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "github",
+    "sync",
+    "git"
+  ],
+  "author": "Saiki77",
+  "license": "CC-BY-NC-4.0",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "latest",
+    "typescript": "^5.5.0"
+  }
+}
