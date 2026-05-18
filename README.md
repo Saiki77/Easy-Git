@@ -92,6 +92,12 @@ File identity is the git blob SHA-1 (matches `git hash-object`), so we compare l
 - Authenticated rate limit headroom is checked before each run.
 - Mobile compatible: no shell access, no node-only modules.
 
+## Permissions
+
+- **Clipboard**: written to only by the **Sign in with GitHub** button, which copies the one-time device code so you can paste it on github.com. No clipboard reads anywhere.
+- **Network**: every HTTP call goes to `api.github.com` (and `github.com/login/...` for Device Flow). No third-party servers.
+- **Vault**: reads and writes only inside the folders you configure as mappings, minus your exclusion globs.
+
 ## Build from source
 
 ```sh
