@@ -16,7 +16,7 @@
     "git"
   ],
   "author": "Saiki77",
-  "license": "CC-BY-NC-4.0",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.24.0",

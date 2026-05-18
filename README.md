@@ -102,4 +102,4 @@ The GitHub Actions workflow at `.github/workflows/release.yml` builds and upload
 
 ## License
 
-[CC BY-NC 4.0](./LICENSE) — free to use and modify for non-commercial purposes with attribution.
+[MIT](./LICENSE)

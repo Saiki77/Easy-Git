@@ -3,6 +3,7 @@ import type EasyGitPlugin from "./main";
 import { FolderMapping } from "./types";
 import { EditMappingModal } from "./ui/mapping-modal";
 import { DeviceFlowModal } from "./ui/device-flow-modal";
+import { ConfirmModal } from "./ui/confirm-modal";
 import { GitHubClient } from "./github/client";
 import {
   describeAuth,
@@ -190,15 +191,21 @@ export class EasyGitSettingTab extends PluginSettingTab {
 
     const deleteBtn = actions.createEl("button", { text: "Delete" });
     deleteBtn.addClass("mod-warning");
-    deleteBtn.onclick = async () => {
-      const ok = confirm(`Delete mapping "${mapping.name}"? Files are not deleted.`);
-      if (!ok) return;
-      this.plugin.settings.mappings = this.plugin.settings.mappings.filter(
-        (m) => m.id !== mapping.id,
-      );
-      await this.plugin.saveSettings();
-      this.plugin.refreshAutoSyncWiring();
-      this.display();
+    deleteBtn.onclick = () => {
+      new ConfirmModal(this.app, {
+        title: "Delete mapping",
+        message: `Delete mapping "${mapping.name}"? Your local and remote files are not touched.`,
+        confirmText: "Delete",
+        destructive: true,
+        onConfirm: async () => {
+          this.plugin.settings.mappings = this.plugin.settings.mappings.filter(
+            (m) => m.id !== mapping.id,
+          );
+          await this.plugin.saveSettings();
+          this.plugin.refreshAutoSyncWiring();
+          this.display();
+        },
+      }).open();
     };
   }
 
