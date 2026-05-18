@@ -243,6 +243,15 @@ export default class EasyGitPlugin extends Plugin {
             `Easy Git (${mapping.name}): skipped ${result.skippedLarge.length} file(s) over size limit.`,
           );
         }
+        if (
+          result.unresolvedWikilinks &&
+          result.unresolvedWikilinks > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
+          );
+        }
       }
     } finally {
       this.syncing.delete(id);

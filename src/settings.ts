@@ -303,7 +303,8 @@ export class EasyGitSettingTab extends PluginSettingTab {
 function summarizeMapping(m: FolderMapping): string {
   const vault = m.vaultFolder || "/";
   const remoteFolder = m.remoteFolder || "/";
-  return `${vault} ↔ ${m.repoOwner}/${m.repoName}:${m.branch}/${remoteFolder}`;
+  const raw = m.rewriteWikilinks === false ? "  (raw wikilinks)" : "";
+  return `${vault} ↔ ${m.repoOwner}/${m.repoName}:${m.branch}/${remoteFolder}${raw}`;
 }
 
 function statusText(m: FolderMapping): string {

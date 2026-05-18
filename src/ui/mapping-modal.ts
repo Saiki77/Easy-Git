@@ -209,6 +209,19 @@ export class EditMappingModal extends Modal {
       );
 
     new Setting(contentEl)
+      .setName("Convert Obsidian wikilinks for GitHub")
+      .setDesc(
+        "Rewrites ![[image.png]] to ![](image.png) at push time so GitHub renders images inline. Attachments outside this folder are copied to attachments/ on the remote. Your vault files are not modified.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.mapping.rewriteWikilinks !== false)
+          .onChange((v) => {
+            this.mapping.rewriteWikilinks = v;
+          }),
+      );
+
+    new Setting(contentEl)
       .addButton((b) =>
         b
           .setButtonText("Cancel")
@@ -269,6 +282,7 @@ function freshMapping(): FolderMapping {
     remoteFolder: "",
     direction: "both",
     autoMode: { kind: "off" },
+    rewriteWikilinks: true,
   };
 }
 

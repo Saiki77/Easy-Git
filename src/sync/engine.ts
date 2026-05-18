@@ -37,6 +37,12 @@ import {
 } from "./classifier";
 import { formatCommitMessage } from "./commit-message";
 import { isExcluded } from "./exclusion";
+import {
+  ExtraBlob,
+  RewriteContext,
+  WikilinkResolver,
+  rewriteWikilinks,
+} from "./wikilink-rewrite";
 
 export interface SyncEngineDeps {
   app: App;
@@ -136,9 +142,31 @@ export class SyncEngine {
       mapping.remoteFolder,
     );
 
-    // 3. Read local files.
+    // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
+    if (
+      mapping.rewriteWikilinks === undefined &&
+      !mapping.rewriteWikilinksMigrated &&
+      mapping.direction !== "pull"
+    ) {
+      mapping.rewriteWikilinks = true;
+      mapping.rewriteWikilinksMigrated = true;
+      if (this.deps.settings.showNotifications) {
+        new Notice(
+          `Easy Git (${mapping.name}): wikilinks will be rewritten to standard Markdown so GitHub renders images. This first sync touches every .md in the mapping.`,
+          8000,
+        );
+      }
+    }
+
+    // 3. Read local files (this also applies wikilink rewrite for .md files).
     const localScan = await this.scanLocalFolder(mapping);
     baseResult.skippedLarge = localScan.skipped;
+    if (localScan.rewrittenWikilinks > 0) {
+      baseResult.rewrittenWikilinks = localScan.rewrittenWikilinks;
+    }
+    if (localScan.unresolvedWikilinks > 0) {
+      baseResult.unresolvedWikilinks = localScan.unresolvedWikilinks;
+    }
 
     // 4. Load last-sync state.
     const lastState: Record<string, FileSyncRecord> =
@@ -252,16 +280,43 @@ export class SyncEngine {
     return baseResult;
   }
 
+  /**
+   * Per-sync caches for the wikilink rewriter so we don't read+rewrite each .md
+   * file twice (once during the SHA scan, once during push).
+   */
+  private rewriteContentCache: Map<string, string> = new Map();
+  private attachmentSourceMap: Map<string, string> = new Map();
+
   private async scanLocalFolder(
     mapping: FolderMapping,
-  ): Promise<{ files: Record<string, LocalFileEntry>; skipped: string[] }> {
+  ): Promise<{
+    files: Record<string, LocalFileEntry>;
+    skipped: string[];
+    unresolvedWikilinks: number;
+    rewrittenWikilinks: number;
+  }> {
     const folder = this.deps.app.vault.getFolderByPath(mapping.vaultFolder);
     const files: Record<string, LocalFileEntry> = {};
     const skipped: string[] = [];
     const excludePatterns = this.deps.settings.excludedPaths;
     const maxBytes = this.deps.settings.maxFileSizeBytes;
 
-    if (!folder) return { files, skipped };
+    this.rewriteContentCache = new Map();
+    this.attachmentSourceMap = new Map();
+
+    const rewriteOn = isRewriteEnabled(mapping) && mapping.direction !== "pull";
+    let unresolvedWikilinks = 0;
+    let rewrittenWikilinks = 0;
+    const accumulatedExtraBlobs: ExtraBlob[] = [];
+
+    if (!folder) {
+      return {
+        files,
+        skipped,
+        unresolvedWikilinks,
+        rewrittenWikilinks,
+      };
+    }
 
     const stack: TFolder[] = [folder];
     while (stack.length > 0) {
@@ -278,17 +333,77 @@ export class SyncEngine {
             skipped.push(relPath);
             continue;
           }
-          const sha = await this.computeLocalSha(child);
-          files[relPath] = {
-            path: relPath,
-            sha,
-            size: child.stat.size,
-            mtime: child.stat.mtime,
-          };
+          if (rewriteOn && child.extension === "md") {
+            const text = await this.deps.app.vault.read(child);
+            const result = rewriteWikilinks(text, {
+              sourcePath: child.path,
+              mappingVaultFolder: mapping.vaultFolder,
+              mappingRemoteFolder: mapping.remoteFolder,
+              resolve: this.makeResolver(),
+            });
+            const finalText = result.markdown;
+            unresolvedWikilinks += result.unresolvedCount;
+            rewrittenWikilinks += result.rewrittenCount;
+            for (const blob of result.extraBlobs) {
+              accumulatedExtraBlobs.push(blob);
+            }
+            this.rewriteContentCache.set(relPath, finalText);
+            files[relPath] = {
+              path: relPath,
+              sha: await computeGitBlobShaFromString(finalText),
+              size: new TextEncoder().encode(finalText).byteLength,
+              mtime: child.stat.mtime,
+            };
+          } else {
+            const sha = await this.computeLocalSha(child);
+            files[relPath] = {
+              path: relPath,
+              sha,
+              size: child.stat.size,
+              mtime: child.stat.mtime,
+            };
+          }
         }
       }
     }
-    return { files, skipped };
+
+    // Fold the deduplicated extra blobs (out-of-folder attachments) into the
+    // local file map so the classifier treats them as locally-present files
+    // at attachments/<basename> under the mapping.
+    const seenRemotePaths = new Set<string>();
+    for (const blob of accumulatedExtraBlobs) {
+      if (seenRemotePaths.has(blob.remoteRelPath)) continue;
+      seenRemotePaths.add(blob.remoteRelPath);
+      const sourceFile = this.deps.app.vault.getFileByPath(blob.vaultPath);
+      if (!sourceFile) continue;
+      if (sourceFile.stat.size > maxBytes) {
+        skipped.push(blob.remoteRelPath);
+        continue;
+      }
+      const sha = await this.computeLocalSha(sourceFile);
+      files[blob.remoteRelPath] = {
+        path: blob.remoteRelPath,
+        sha,
+        size: sourceFile.stat.size,
+        mtime: sourceFile.stat.mtime,
+      };
+      this.attachmentSourceMap.set(blob.remoteRelPath, blob.vaultPath);
+    }
+
+    return {
+      files,
+      skipped,
+      unresolvedWikilinks,
+      rewrittenWikilinks,
+    };
+  }
+
+  private makeResolver(): WikilinkResolver {
+    const md = this.deps.app.metadataCache;
+    return (linkpath, sourcePath) => {
+      const file = md.getFirstLinkpathDest(linkpath, sourcePath);
+      return file ? { path: file.path } : null;
+    };
   }
 
   private async computeLocalSha(file: TFile): Promise<string> {
@@ -441,6 +556,23 @@ export class SyncEngine {
     mapping: FolderMapping,
     relPath: string,
   ): Promise<{ base64: string }> {
+    // Cached rewritten markdown content (computed during scan).
+    const cached = this.rewriteContentCache.get(relPath);
+    if (cached !== undefined) {
+      const bytes = new TextEncoder().encode(cached);
+      return { base64: arrayBufferToBase64(bytes.buffer) };
+    }
+    // Out-of-folder attachment: read from its real vault path.
+    const attachmentSource = this.attachmentSourceMap.get(relPath);
+    if (attachmentSource) {
+      const sourceFile = this.deps.app.vault.getFileByPath(attachmentSource);
+      if (!sourceFile) {
+        throw new Error(`Attachment source not found: ${attachmentSource}`);
+      }
+      const buf = await this.deps.app.vault.readBinary(sourceFile);
+      return { base64: arrayBufferToBase64(buf) };
+    }
+
     const fullPath = vaultPathFor(mapping, relPath);
     const file = this.deps.app.vault.getFileByPath(fullPath);
     if (!file) throw new Error(`Vault file not found: ${fullPath}`);
@@ -452,6 +584,14 @@ export class SyncEngine {
     const buf = await this.deps.app.vault.readBinary(file);
     return { base64: arrayBufferToBase64(buf) };
   }
+}
+
+/**
+ * True if this mapping should have its .md files rewritten on push.
+ * Treats `undefined` as `true` (auto-enable on first sync after v0.2 upgrade).
+ */
+export function isRewriteEnabled(mapping: FolderMapping): boolean {
+  return mapping.rewriteWikilinks !== false;
 }
 
 function computeNewState(

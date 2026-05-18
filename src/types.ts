@@ -29,6 +29,16 @@ export interface FolderMapping {
   direction: SyncDirection;
   autoMode: AutoMode;
   commitTemplate?: string;
+  /**
+   * If true, .md files are pushed with Obsidian wikilink embeds rewritten to
+   * standard CommonMark image/link syntax so GitHub renders them. If
+   * undefined on an existing mapping, the engine auto-enables on first
+   * sync after the v0.2 upgrade.
+   */
+  rewriteWikilinks?: boolean;
+  /** Set to true the first time the engine has auto-enabled rewriteWikilinks
+   * (so the migration Notice fires once, not on every sync). */
+  rewriteWikilinksMigrated?: boolean;
   lastSyncState?: LastSyncState;
   lastSyncAt?: number;
   lastSyncError?: string;
@@ -106,6 +116,10 @@ export interface SyncResult {
   durationMs: number;
   skippedLarge?: string[];
   noopReason?: string;
+  /** Number of wikilinks that could not be resolved at push time. */
+  unresolvedWikilinks?: number;
+  /** Number of wikilinks actually rewritten across this run. */
+  rewrittenWikilinks?: number;
 }
 
 export interface LocalFileEntry {

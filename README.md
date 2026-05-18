@@ -58,6 +58,23 @@ Settings → Easy Git → **+ Add mapping**. Pick the vault folder, the repo, th
 
 After that, sync from the ribbon menu, the command palette (`Easy Git: Sync mapping…`), or the **Sync** button next to each mapping.
 
+## Wikilinks and attachments
+
+Obsidian uses wikilink embeds like `![[Pasted image …png]]`. GitHub's Markdown renderer doesn't understand them, so they'd show as literal text. Easy Git rewrites them to standard CommonMark at push time:
+
+| In your vault | What lands on GitHub |
+| --- | --- |
+| `![[image.png]]` | `![](image.png)` |
+| `![[image.png\|Caption]]` | `![Caption](image.png)` |
+| `![[image.png\|400]]` | `![](image.png)` (width hint dropped) |
+| `![[note#header]]` | unchanged (GitHub can't transclude) |
+
+If a wikilink points to an attachment outside the mapping's vault folder, the file is copied to `attachments/<basename>` inside the mapping's remote folder and the rewritten link points there. That keeps each remote folder self-contained, you can browse it on GitHub without broken references.
+
+Your vault is never modified. The rewrite only affects the bytes pushed to GitHub. Pulling those notes back into Obsidian renders fine because both wikilink and standard-Markdown forms work in Obsidian.
+
+Toggle off per mapping if you want the raw wikilinks pushed verbatim (the mapping summary will show `(raw wikilinks)`).
+
 ## Conflicts
 
 If the same file changed on both sides since the last sync, Easy Git pauses and lets you pick **keep local**, **keep remote**, or **keep both** (renames your local copy with a `-conflict-local-<timestamp>` suffix so neither side is lost). Cancelling the conflict modal aborts the entire run without touching anything.
