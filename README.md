@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/hero.png" alt="Easy Git — sync Obsidian folders to GitHub" width="100%">
+  <img src="docs/screenshots/marketing-1-hero.png" alt="Easy Git — sync Obsidian folders to GitHub" width="100%">
 </p>
 
 <table>
