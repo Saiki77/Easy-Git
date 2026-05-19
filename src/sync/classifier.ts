@@ -182,14 +182,24 @@ export function planFromResolvedConflicts(
     if (c.resolution === "keep-local") {
       if (direction === "pull") continue;
       if (c.kind === "local-edited-remote-deleted") {
+        // Local has edits, remote was deleted. Keep local → push it back as add.
         extraActions.push({ path: c.path, op: "push-add", localSha: c.localSha });
+      } else if (c.kind === "remote-edited-local-deleted") {
+        // Local was deleted, remote was edited. Keep local (the deletion) →
+        // push the deletion to remote.
+        extraActions.push({ path: c.path, op: "push-delete", remoteSha: c.remoteSha });
       } else {
         extraActions.push({ path: c.path, op: "push-modify", localSha: c.localSha });
       }
     } else if (c.resolution === "keep-remote") {
       if (direction === "push") continue;
       if (c.kind === "remote-edited-local-deleted") {
+        // Remote has edits, local was deleted. Keep remote → pull it back as add.
         extraActions.push({ path: c.path, op: "pull-add", remoteSha: c.remoteSha });
+      } else if (c.kind === "local-edited-remote-deleted") {
+        // Remote was deleted, local was edited. Keep remote (the deletion) →
+        // pull the deletion locally.
+        extraActions.push({ path: c.path, op: "pull-delete", localSha: c.localSha });
       } else {
         extraActions.push({ path: c.path, op: "pull-modify", remoteSha: c.remoteSha });
       }

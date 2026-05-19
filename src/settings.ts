@@ -11,8 +11,17 @@ import {
   getAuthenticatedUser,
 } from "./github/auth";
 
+interface MappingRowRefs {
+  syncBtn: HTMLButtonElement;
+  statusEl: HTMLElement;
+}
+
 export class EasyGitSettingTab extends PluginSettingTab {
   private plugin: EasyGitPlugin;
+  // Live references to per-mapping row elements so we can update the Sync
+  // button + status text from outside this class (e.g. when the plugin
+  // reports a sync state change) without re-rendering the whole tab.
+  private mappingRowRefs: Map<string, MappingRowRefs> = new Map();
 
   constructor(app: App, plugin: EasyGitPlugin) {
     super(app, plugin);
@@ -22,10 +31,29 @@ export class EasyGitSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    this.mappingRowRefs.clear();
 
     this.renderAuthSection(containerEl);
     this.renderMappingsSection(containerEl);
     this.renderOptionsSection(containerEl);
+  }
+
+  /**
+   * Update the Sync button + status text for every visible mapping row to
+   * reflect current sync state. Called by main.ts whenever a sync starts or
+   * ends, so the buttons stay accurate across settings open/close cycles.
+   */
+  refreshSyncStates(): void {
+    for (const [id, refs] of this.mappingRowRefs) {
+      const mapping = this.plugin.settings.mappings.find((m) => m.id === id);
+      if (!mapping) continue;
+      const isSyncing = this.plugin.isSyncing(id);
+      refs.syncBtn.disabled = isSyncing;
+      refs.syncBtn.setText(isSyncing ? "Syncing…" : "Sync");
+      refs.statusEl.setText(statusText(mapping, isSyncing));
+      refs.statusEl.toggleClass("is-syncing", isSyncing);
+      refs.statusEl.toggleClass("is-error", !isSyncing && !!mapping.lastSyncError);
+    }
   }
 
   private renderAuthSection(parent: HTMLElement): void {
@@ -162,10 +190,13 @@ export class EasyGitSettingTab extends PluginSettingTab {
       cls: "easy-git-mapping-summary",
       text: summarizeMapping(mapping),
     });
-    info.createDiv({
+    const isSyncing = this.plugin.isSyncing(mapping.id);
+    const statusEl = info.createDiv({
       cls: "easy-git-mapping-status",
-      text: statusText(mapping),
+      text: statusText(mapping, isSyncing),
     });
+    if (isSyncing) statusEl.addClass("is-syncing");
+    else if (mapping.lastSyncError) statusEl.addClass("is-error");
 
     const actions = row.createDiv({ cls: "easy-git-mapping-actions" });
     actions.createSpan({
@@ -173,18 +204,20 @@ export class EasyGitSettingTab extends PluginSettingTab {
       text: directionIcon(mapping.direction),
     });
 
-    const syncBtn = actions.createEl("button", { text: "Sync" });
+    const syncBtn = actions.createEl("button", {
+      text: isSyncing ? "Syncing…" : "Sync",
+    });
+    syncBtn.disabled = isSyncing;
     syncBtn.onclick = async () => {
+      if (this.plugin.isSyncing(mapping.id)) return;
+      // Visual feedback immediately; plugin.syncMapping will fire
+      // refreshSyncStates() which keeps us in sync from here on.
       syncBtn.disabled = true;
       syncBtn.setText("Syncing…");
-      try {
-        await this.plugin.syncMapping(mapping.id, "manual");
-      } finally {
-        syncBtn.disabled = false;
-        syncBtn.setText("Sync");
-        this.display();
-      }
+      await this.plugin.syncMapping(mapping.id, "manual");
     };
+
+    this.mappingRowRefs.set(mapping.id, { syncBtn, statusEl });
 
     const editBtn = actions.createEl("button", { text: "Edit" });
     editBtn.onclick = () => this.openMappingModal(mapping);
@@ -312,7 +345,8 @@ function isVaultRootFolder(vaultFolder: string): boolean {
   return t === "" || t === "/";
 }
 
-function statusText(m: FolderMapping): string {
+function statusText(m: FolderMapping, isSyncing = false): string {
+  if (isSyncing) return "Syncing…";
   if (m.lastSyncError) return "Last sync error: " + m.lastSyncError;
   if (m.lastSyncAt) {
     const minutes = Math.floor((Date.now() - m.lastSyncAt) / 60_000);

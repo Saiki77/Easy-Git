@@ -39,6 +39,12 @@ export default class EasyGitPlugin extends Plugin {
   private syncing: Set<string> = new Set();
   private pendingAfterSync: Set<string> = new Set();
   private statusBar?: StatusBarIndicator;
+  private settingsTab?: EasyGitSettingTab;
+
+  /** Whether a sync run for this mapping is currently in flight. */
+  isSyncing(mappingId: string): boolean {
+    return this.syncing.has(mappingId);
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -50,7 +56,8 @@ export default class EasyGitPlugin extends Plugin {
       resolveConflicts: (mapping, conflicts) => this.openConflictModal(mapping, conflicts),
     });
 
-    this.addSettingTab(new EasyGitSettingTab(this.app, this));
+    this.settingsTab = new EasyGitSettingTab(this.app, this);
+    this.addSettingTab(this.settingsTab);
 
     this.addRibbonIcon("git-branch", "Easy Git: sync menu", (evt: MouseEvent) => {
       this.openSyncMenu(evt);
@@ -296,6 +303,7 @@ export default class EasyGitPlugin extends Plugin {
     }
     this.syncing.add(id);
     this.statusBar?.refresh();
+    this.settingsTab?.refreshSyncStates();
     try {
       if (this.settings.debugLogging) {
         console.log(`[Easy Git] sync start (${trigger}) — ${mapping.name}`);
@@ -337,6 +345,7 @@ export default class EasyGitPlugin extends Plugin {
     } finally {
       this.syncing.delete(id);
       this.statusBar?.refresh();
+      this.settingsTab?.refreshSyncStates();
       if (this.pendingAfterSync.has(id)) {
         this.pendingAfterSync.delete(id);
         // schedule another run on a microtask so we don't recurse the stack
