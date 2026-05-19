@@ -5,6 +5,7 @@ import {
   Plugin,
   TAbstractFile,
   TFile,
+  TFolder,
   debounce,
 } from "obsidian";
 import {
@@ -110,6 +111,18 @@ export default class EasyGitPlugin extends Plugin {
     );
     this.statusBar.startTicker(this);
 
+    // Auto-fix folder renames: if the user renames or moves a folder that
+    // matches (or contains) a mapping's vaultFolder, update the mapping
+    // automatically. Without this, the next sync would see the folder missing
+    // and abort. This listener is always-on (independent of auto-sync mode).
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (file instanceof TFolder) {
+          this.handleFolderRename(oldPath, file.path);
+        }
+      }),
+    );
+
     this.app.workspace.onLayoutReady(() => {
       this.refreshAutoSyncWiring();
       this.runStartupSyncs();
@@ -140,6 +153,35 @@ export default class EasyGitPlugin extends Plugin {
     this.app.setting.open();
     // @ts-expect-error setting is private but accessible at runtime
     this.app.setting.openTabById(this.manifest.id);
+  }
+
+  /**
+   * Update any mapping whose vaultFolder matches the renamed folder or sits
+   * inside it. Triggered by Obsidian's rename event for both renames and
+   * drag-moves. Saves settings + refreshes the status bar.
+   */
+  private handleFolderRename(oldPath: string, newPath: string): void {
+    if (!oldPath || oldPath === newPath) return;
+    let changed = 0;
+    for (const mapping of this.settings.mappings) {
+      if (mapping.vaultFolder === oldPath) {
+        mapping.vaultFolder = newPath;
+        changed += 1;
+      } else if (mapping.vaultFolder.startsWith(oldPath + "/")) {
+        // The renamed folder is a parent of the mapping's folder.
+        mapping.vaultFolder = newPath + mapping.vaultFolder.slice(oldPath.length);
+        changed += 1;
+      }
+    }
+    if (changed > 0) {
+      void this.saveSettings();
+      if (this.settings.showNotifications) {
+        const label = changed === 1 ? "mapping" : "mappings";
+        new Notice(`Easy Git: updated ${changed} ${label} for folder rename.`);
+      }
+      this.refreshAutoSyncWiring();
+      this.statusBar?.refresh();
+    }
   }
 
   onunload(): void {

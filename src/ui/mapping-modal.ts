@@ -29,6 +29,12 @@ export class EditMappingModal extends Modal {
   private branchEl?: HTMLSpanElement;
   private intervalSetting?: Setting;
 
+  // Tracks whether the user has explicitly picked a vault folder in THIS
+  // editing session. Existing mappings start picked; new mappings start
+  // unpicked so a default empty vaultFolder doesn't silently mean
+  // "whole vault" on Save.
+  private vaultFolderPicked: boolean;
+
   constructor(app: App, opts: MappingModalOptions) {
     super(app);
     this.opts = opts;
@@ -36,6 +42,7 @@ export class EditMappingModal extends Modal {
     this.mapping = opts.initial
       ? structuredClone(opts.initial)
       : freshMapping();
+    this.vaultFolderPicked = !this.isNew;
     this.client =
       opts.auth.method !== "none" && opts.auth.token
         ? new GitHubClient({ token: opts.auth.token })
@@ -62,15 +69,22 @@ export class EditMappingModal extends Modal {
 
     new Setting(contentEl)
       .setName("Vault folder")
-      .setDesc("Folder inside your Obsidian vault")
+      .setDesc(
+        "Folder inside your Obsidian vault. Pick the vault root for whole-vault sync.",
+      )
       .addButton((btn) => {
-        btn.setButtonText(this.mapping.vaultFolder || "Choose folder…");
+        btn.setButtonText(
+          this.vaultFolderPicked
+            ? formatVaultFolderLabel(this.mapping.vaultFolder)
+            : "Choose folder…",
+        );
         btn.buttonEl.addClass("easy-git-picker-button");
         this.vaultFolderEl = btn.buttonEl as unknown as HTMLSpanElement;
         btn.onClick(() => {
           new VaultFolderSuggest(this.app, (folder: TFolder) => {
             this.mapping.vaultFolder = folder.path;
-            btn.setButtonText(folder.path || "/");
+            this.vaultFolderPicked = true;
+            btn.setButtonText(formatVaultFolderLabel(folder.path));
           }).open();
         });
       });
@@ -242,7 +256,7 @@ export class EditMappingModal extends Modal {
   }
 
   private async save(): Promise<void> {
-    const err = validate(this.mapping);
+    const err = validate(this.mapping, this.vaultFolderPicked);
     if (err) {
       new Notice("Easy Git: " + err);
       return;
@@ -269,6 +283,12 @@ export class EditMappingModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
   }
+}
+
+function formatVaultFolderLabel(path: string): string {
+  const t = (path ?? "").trim();
+  if (t === "" || t === "/") return "Whole vault";
+  return t;
 }
 
 function freshMapping(): FolderMapping {
@@ -300,9 +320,9 @@ function autoModeFromKind(kind: string, prev: AutoMode): AutoMode {
   }
 }
 
-function validate(m: FolderMapping): string | null {
+function validate(m: FolderMapping, vaultFolderPicked: boolean): string | null {
   if (!m.name.trim()) return "Name is required.";
-  if (!m.vaultFolder && m.vaultFolder !== "") return "Choose a vault folder.";
+  if (!vaultFolderPicked) return "Choose a vault folder (or pick the vault root for whole-vault sync).";
   if (!m.repoOwner || !m.repoName) return "Choose a repository.";
   if (!m.branch) return "Choose a branch.";
   if (m.remoteFolder.startsWith("/")) return "Remote folder path cannot start with '/'.";

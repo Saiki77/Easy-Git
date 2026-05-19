@@ -295,7 +295,20 @@ export class SyncEngine {
     unresolvedWikilinks: number;
     rewrittenWikilinks: number;
   }> {
-    const folder = this.deps.app.vault.getFolderByPath(mapping.vaultFolder);
+    const isWholeVault = isVaultRoot(mapping.vaultFolder);
+    const folder = isWholeVault
+      ? this.deps.app.vault.getRoot()
+      : this.deps.app.vault.getFolderByPath(mapping.vaultFolder);
+
+    // Safety net: if the configured folder no longer exists (renamed/moved
+    // outside Obsidian or deleted), refuse to sync. Without this we'd treat
+    // every previously-synced file as locally-deleted and push the deletions.
+    if (!folder) {
+      throw new Error(
+        `Vault folder "${mapping.vaultFolder}" no longer exists. Edit the mapping or restore the folder.`,
+      );
+    }
+
     const files: Record<string, LocalFileEntry> = {};
     const skipped: string[] = [];
     const localIgnore = await this.loadLocalIgnore(mapping);
@@ -409,7 +422,9 @@ export class SyncEngine {
    * — `isExcluded` already strips them). Returns [] if the file doesn't exist.
    */
   private async loadLocalIgnore(mapping: FolderMapping): Promise<string[]> {
-    const folder = mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
+    const folder = isVaultRoot(mapping.vaultFolder)
+      ? ""
+      : mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
     const path = folder ? `${folder}/.easygitignore` : ".easygitignore";
     const file = this.deps.app.vault.getFileByPath(path);
     if (!file) return [];
@@ -677,8 +692,15 @@ function computeNewState(
 }
 
 function vaultPathFor(mapping: FolderMapping, relPath: string): string {
+  if (isVaultRoot(mapping.vaultFolder)) return normalizePath(relPath);
   const folder = mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
   return normalizePath(folder ? `${folder}/${relPath}` : relPath);
+}
+
+/** True if the mapping's vaultFolder represents "the whole vault" (root). */
+export function isVaultRoot(vaultFolder: string): boolean {
+  const trimmed = vaultFolder.trim();
+  return trimmed === "" || trimmed === "/";
 }
 
 function repoPathFor(mapping: FolderMapping, relPath: string): string {
@@ -687,6 +709,7 @@ function repoPathFor(mapping: FolderMapping, relPath: string): string {
 }
 
 function relativeTo(base: string, fullPath: string): string {
+  if (isVaultRoot(base)) return fullPath;
   const b = base.replace(/^\/+|\/+$/g, "");
   if (!b) return fullPath;
   if (fullPath === b) return "";
