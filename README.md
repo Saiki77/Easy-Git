@@ -74,6 +74,8 @@ Each run produces one atomic commit via GitHub's Git Data API: blob → tree (wi
 
 File identity is the git blob SHA-1 (matches `git hash-object`), so we compare local and remote without round-tripping content.
 
+For a step-by-step walkthrough of one sync run, the three-way classifier, the conflict-resolution choices, the wikilink rewriter, and the OAuth Device Flow, see [docs/how-it-works.md](docs/how-it-works.md).
+
 ## Defaults
 
 - Excluded: `.obsidian/**`, `.trash/**`, `.git/**`, `node_modules/**` (editable in settings).
