@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/marketing-1-hero.png" alt="Easy Git — sync Obsidian folders to GitHub" width="100%">
+  <img src="docs/screenshots/marketing-1-hero.png" alt="Easy Git: sync Obsidian folders to GitHub" width="100%">
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@ After that, sync from the ribbon menu, the command palette (`Easy Git: Sync mapp
 
 ## Multiple destinations per mapping
 
-A single mapping can push the same vault folder to — or pull it from — several places at once. The mapping's direction (push / pull / both) applies to every destination of that mapping.
+A single mapping can push the same vault folder to (or pull it from) several places at once. The mapping's direction (push / pull / both) applies to every destination of that mapping.
 
 ### One vault folder → many remote folders (push or both)
 
@@ -91,14 +91,14 @@ shared-team/main/docs/     ──┼──> Notes/aggregated/
 upstream/main/handbook/    ──┘
 ```
 
-Each destination pulls its own remote into the shared vault folder and tracks its own last-sync state. Each remote's files keep their existing relative paths — if `team-repo` brings `intro.md` and `upstream` also brings `intro.md`, whichever destination syncs last overwrites the file in your vault. Use distinct remote paths or rename files on the remote side if you need them to coexist.
+Each destination pulls its own remote into the shared vault folder and tracks its own last-sync state. Each remote's files keep their existing relative paths. If `team-repo` brings `intro.md` and `upstream` also brings `intro.md`, whichever destination syncs last overwrites the file in your vault. Use distinct remote paths or rename files on the remote side if you need them to coexist.
 
 ### How it behaves
 
 - Destinations sync **sequentially**, each producing its own atomic commit. Order is the order shown in the modal.
 - Each destination tracks **its own last-sync state**, so a hiccup with one remote doesn't poison the others. If destination 1 errors, destination 2 still tries.
 - The conflict modal shows the destination label in its title when a mapping has more than one destination, so it's clear which target the conflict is for.
-- In pull-only multi-destination mappings, files owned by sibling destinations don't fire informational "not pushed" notices — each destination sees only its own slice.
+- In pull-only multi-destination mappings, files owned by sibling destinations don't fire informational "not pushed" notices. Each destination sees only its own slice.
 
 ### Adding or removing a destination
 
@@ -148,10 +148,10 @@ Drop a `.easygitignore` file at the root of any mapping's vault folder and its p
 
 A small indicator sits in Obsidian's bottom-right status bar showing the aggregate sync state across all mappings:
 
-- `↻ Ready` — at least one mapping configured, nothing has synced yet
-- `↻ Synced 5m ago` — last successful sync (most recent across mappings)
-- `↻ Syncing…` — a sync is in progress
-- `! Easy Git error` — at least one mapping has an unresolved error
+- `↻ Ready`: at least one mapping configured, nothing has synced yet
+- `↻ Synced 5m ago`: last successful sync (most recent across mappings)
+- `↻ Syncing…`: a sync is in progress
+- `! Easy Git error`: at least one mapping has an unresolved error
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
 
