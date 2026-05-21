@@ -197,9 +197,19 @@ export class SyncEngine {
     const lastState: Record<string, FileSyncRecord> =
       destination.lastSyncState?.files ?? {};
 
+    // 4.5. Multi-source pull noise filter: when the mapping is pull-only and
+    // has more than one destination, the vault folder is a shared sink for
+    // several upstreams. Files owned by sibling destinations would otherwise
+    // appear as "local-only changes not pushed" for this destination and
+    // produce noisy Notices on every sync. Strip them from this dest's view.
+    const effectiveLocal =
+      mapping.direction === "pull" && mapping.destinations.length > 1
+        ? filterSiblingOwnedPaths(localScan.files, mapping, destination)
+        : localScan.files;
+
     // 5. Classify.
     const plan = classify({
-      local: localScan.files,
+      local: effectiveLocal,
       remote,
       lastState,
       direction: mapping.direction,
@@ -659,6 +669,33 @@ export function isRewriteEnabled(mapping: FolderMapping): boolean {
 export function destinationLabel(d: MappingDestination): string {
   const remote = d.remoteFolder || "/";
   return `${d.repoOwner}/${d.repoName}:${d.branch}/${remote}`;
+}
+
+/**
+ * Remove paths that are tracked by other destinations of the same mapping.
+ * Used in the pull-multi-source case to keep each destination focused on its
+ * own subset of the shared vault folder.
+ */
+function filterSiblingOwnedPaths(
+  localFiles: Record<string, LocalFileEntry>,
+  mapping: FolderMapping,
+  current: MappingDestination,
+): Record<string, LocalFileEntry> {
+  const siblingPaths = new Set<string>();
+  for (const other of mapping.destinations) {
+    if (other.id === current.id) continue;
+    const files = other.lastSyncState?.files;
+    if (!files) continue;
+    for (const path of Object.keys(files)) {
+      siblingPaths.add(path);
+    }
+  }
+  if (siblingPaths.size === 0) return localFiles;
+  const out: Record<string, LocalFileEntry> = {};
+  for (const [path, entry] of Object.entries(localFiles)) {
+    if (!siblingPaths.has(path)) out[path] = entry;
+  }
+  return out;
 }
 
 function computeNewState(

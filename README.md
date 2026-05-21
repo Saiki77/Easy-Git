@@ -49,7 +49,9 @@ After that, sync from the ribbon menu, the command palette (`Easy Git: Sync mapp
 
 ## Multiple destinations per mapping
 
-A single mapping can push the same vault folder to several places at once. Two patterns this unlocks:
+A single mapping can push the same vault folder to — or pull it from — several places at once. The mapping's direction (push / pull / both) applies to every destination of that mapping.
+
+### One vault folder → many remote folders (push or both)
 
 **Mirror to several repos**
 
@@ -72,16 +74,28 @@ Notes/projects ──> site/main/src/content/projects/
 Notes/about    ──> site/main/src/about/
 ```
 
-Each of those is a separate mapping with one destination, but the multi-destination feature means a single mapping like `Notes` can fan out to two subfolders of the same site repo if that fits your layout better.
+### Many remote folders → one vault folder (pull)
 
-**How it behaves**
+The same mechanism works in the other direction. Set the mapping's direction to **pull** and add multiple destinations to aggregate several remote sources into a single vault folder:
+
+```
+Remote                                   Vault
+──────                                   ─────
+team-repo/main/notes/      ──┐
+shared-team/main/docs/     ──┼──> Notes/aggregated/
+upstream/main/handbook/    ──┘
+```
+
+Each destination pulls its own remote into the shared vault folder and tracks its own last-sync state. Each remote's files keep their existing relative paths — if `team-repo` brings `intro.md` and `upstream` also brings `intro.md`, whichever destination syncs last overwrites the file in your vault. Use distinct remote paths or rename files on the remote side if you need them to coexist.
+
+### How it behaves
 
 - Destinations sync **sequentially**, each producing its own atomic commit. Order is the order shown in the modal.
 - Each destination tracks **its own last-sync state**, so a hiccup with one remote doesn't poison the others. If destination 1 errors, destination 2 still tries.
 - The conflict modal shows the destination label in its title when a mapping has more than one destination, so it's clear which target the conflict is for.
-- Per-mapping settings (direction, auto mode, commit template, wikilink rewrite) apply to every destination of that mapping. Pick "push" once and all destinations are push-only.
+- In pull-only multi-destination mappings, files owned by sibling destinations don't fire informational "not pushed" notices — each destination sees only its own slice.
 
-**Adding or removing a destination**
+### Adding or removing a destination
 
 In the mapping modal, scroll to **Destinations** and click **+ Add destination** for another row, or **Remove** on an existing one. Each row needs a repo and a branch; the path inside the repo can be empty (= repo root). Save when done.
 
