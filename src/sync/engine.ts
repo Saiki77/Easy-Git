@@ -6,6 +6,7 @@ import {
   FolderMapping,
   LastSyncState,
   LocalFileEntry,
+  MappingDestination,
   PluginSettings,
   RemoteFileEntry,
   SyncResult,
@@ -39,7 +40,6 @@ import { formatCommitMessage } from "./commit-message";
 import { isExcluded } from "./exclusion";
 import {
   ExtraBlob,
-  RewriteContext,
   WikilinkResolver,
   rewriteWikilinks,
 } from "./wikilink-rewrite";
@@ -49,9 +49,11 @@ export interface SyncEngineDeps {
   settings: PluginSettings;
   saveSettings: () => Promise<void>;
   /** Resolve conflicts. Returns the same list with `resolution` set, or null
-   * if the user cancelled. */
+   * if the user cancelled. The destination is passed so the modal title can
+   * disambiguate when a mapping has multiple destinations. */
   resolveConflicts: (
     mapping: FolderMapping,
+    destination: MappingDestination,
     conflicts: ConflictEntry[],
   ) => Promise<ConflictEntry[] | null>;
 }
@@ -61,10 +63,31 @@ const MAX_NON_FF_RETRIES = 3;
 export class SyncEngine {
   constructor(private deps: SyncEngineDeps) {}
 
-  async syncMapping(mapping: FolderMapping): Promise<SyncResult> {
+  /**
+   * Sync every destination of this mapping, sequentially. Returns one
+   * SyncResult per destination. Independent — if destination 1 errors,
+   * destination 2 still tries.
+   */
+  async syncMapping(mapping: FolderMapping): Promise<SyncResult[]> {
+    const results: SyncResult[] = [];
+    for (const destination of mapping.destinations) {
+      results.push(await this.syncDestination(mapping, destination));
+    }
+    return results;
+  }
+
+  /**
+   * One sync run for one destination. Mirrors the v0.4 single-destination
+   * `runOnce` but reads/writes destination-scoped state.
+   */
+  private async syncDestination(
+    mapping: FolderMapping,
+    destination: MappingDestination,
+  ): Promise<SyncResult> {
     const start = Date.now();
     const result: SyncResult = {
       mappingId: mapping.id,
+      destinationId: destination.id,
       ok: false,
       added: 0,
       modified: 0,
@@ -86,7 +109,7 @@ export class SyncEngine {
     while (attempt < MAX_NON_FF_RETRIES) {
       attempt += 1;
       try {
-        const outcome = await this.runOnce(client, mapping);
+        const outcome = await this.runOnce(client, mapping, destination);
         if (outcome === "retry") {
           await delay(backoffMs(attempt));
           continue;
@@ -114,9 +137,11 @@ export class SyncEngine {
   private async runOnce(
     client: GitHubClient,
     mapping: FolderMapping,
+    destination: MappingDestination,
   ): Promise<SyncResult | "retry"> {
     const baseResult: SyncResult = {
       mappingId: mapping.id,
+      destinationId: destination.id,
       ok: false,
       added: 0,
       modified: 0,
@@ -128,18 +153,18 @@ export class SyncEngine {
     // 1. Pin remote head.
     const head = await getBranchHead(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
-      mapping.branch,
+      destination.repoOwner,
+      destination.repoName,
+      destination.branch,
     );
 
     // 2. Read remote tree.
     const remote = await listRemoteFolderFiles(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
+      destination.repoOwner,
+      destination.repoName,
       head.treeSha,
-      mapping.remoteFolder,
+      destination.remoteFolder,
     );
 
     // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
@@ -158,7 +183,7 @@ export class SyncEngine {
       }
     }
 
-    // 3. Read local files (this also applies wikilink rewrite for .md files).
+    // 3. Read local files (applies wikilink rewrite for .md when enabled).
     const localScan = await this.scanLocalFolder(mapping);
     baseResult.skippedLarge = localScan.skipped;
     if (localScan.rewrittenWikilinks > 0) {
@@ -168,9 +193,9 @@ export class SyncEngine {
       baseResult.unresolvedWikilinks = localScan.unresolvedWikilinks;
     }
 
-    // 4. Load last-sync state.
+    // 4. Load last-sync state for THIS destination.
     const lastState: Record<string, FileSyncRecord> =
-      mapping.lastSyncState?.files ?? {};
+      destination.lastSyncState?.files ?? {};
 
     // 5. Classify.
     const plan = classify({
@@ -183,7 +208,11 @@ export class SyncEngine {
     // 6. Resolve conflicts.
     let conflictPlan: ResolvedConflictPlan = { extraActions: [], keepBothRenames: [] };
     if (plan.conflicts.length > 0) {
-      const resolved = await this.deps.resolveConflicts(mapping, plan.conflicts);
+      const resolved = await this.deps.resolveConflicts(
+        mapping,
+        destination,
+        plan.conflicts,
+      );
       if (!resolved) {
         baseResult.conflicts = plan.conflicts;
         baseResult.error = "Sync cancelled at conflict resolution.";
@@ -208,7 +237,7 @@ export class SyncEngine {
     // 7. Apply pull-side actions.
     for (const action of actions) {
       if (action.op === "pull-add" || action.op === "pull-modify") {
-        await this.applyPullModify(mapping, action, client);
+        await this.applyPullModify(mapping, destination, action, client);
       } else if (action.op === "pull-delete") {
         await this.applyPullDelete(mapping, action);
       }
@@ -225,6 +254,7 @@ export class SyncEngine {
       const commitResult = await this.buildAndPushCommit(
         client,
         mapping,
+        destination,
         head.commitSha,
         head.treeSha,
         pushActions,
@@ -237,9 +267,8 @@ export class SyncEngine {
       newCommitSha = commitResult;
     }
 
-    // 9. Persist new last-sync state.
+    // 9. Persist new last-sync state on the destination.
     const newState = computeNewState(
-      mapping,
       newCommitSha ?? head.commitSha,
       head.treeSha,
       actions,
@@ -247,9 +276,9 @@ export class SyncEngine {
       remote,
       lastState,
     );
-    mapping.lastSyncState = newState;
-    mapping.lastSyncAt = Date.now();
-    mapping.lastSyncError = undefined;
+    destination.lastSyncState = newState;
+    destination.lastSyncAt = Date.now();
+    destination.lastSyncError = undefined;
     await this.deps.saveSettings();
 
     // 10. Counts for the result.
@@ -261,11 +290,12 @@ export class SyncEngine {
     baseResult.commitSha = newCommitSha;
     baseResult.conflicts = plan.conflicts.map((c) => ({ ...c }));
 
+    const destLabel = destinationLabel(destination);
     if (mapping.direction === "push" && plan.informationalRemoteChanges.length > 0) {
       const n = plan.informationalRemoteChanges.length;
       if (this.deps.settings.showNotifications) {
         new Notice(
-          `Easy Git (${mapping.name}): ${n} file${n === 1 ? "" : "s"} changed on remote (not pulled — push-only mapping).`,
+          `Easy Git (${mapping.name} → ${destLabel}): ${n} file${n === 1 ? "" : "s"} changed on remote (not pulled — push-only mapping).`,
         );
       }
     }
@@ -273,7 +303,7 @@ export class SyncEngine {
       const n = plan.informationalLocalChanges.length;
       if (this.deps.settings.showNotifications) {
         new Notice(
-          `Easy Git (${mapping.name}): ${n} file${n === 1 ? "" : "s"} changed locally (not pushed — pull-only mapping).`,
+          `Easy Git (${mapping.name} → ${destLabel}): ${n} file${n === 1 ? "" : "s"} changed locally (not pushed — pull-only mapping).`,
         );
       }
     }
@@ -327,15 +357,6 @@ export class SyncEngine {
     let rewrittenWikilinks = 0;
     const accumulatedExtraBlobs: ExtraBlob[] = [];
 
-    if (!folder) {
-      return {
-        files,
-        skipped,
-        unresolvedWikilinks,
-        rewrittenWikilinks,
-      };
-    }
-
     const stack: TFolder[] = [folder];
     while (stack.length > 0) {
       const cur = stack.pop()!;
@@ -356,7 +377,7 @@ export class SyncEngine {
             const result = rewriteWikilinks(text, {
               sourcePath: child.path,
               mappingVaultFolder: mapping.vaultFolder,
-              mappingRemoteFolder: mapping.remoteFolder,
+              mappingRemoteFolder: "",
               resolve: this.makeResolver(),
             });
             const finalText = result.markdown;
@@ -455,14 +476,15 @@ export class SyncEngine {
 
   private async applyPullModify(
     mapping: FolderMapping,
+    destination: MappingDestination,
     action: FileAction,
     client: GitHubClient,
   ): Promise<void> {
     if (!action.remoteSha) return;
     const blob = await getBlobContent(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
+      destination.repoOwner,
+      destination.repoName,
       action.remoteSha,
     );
     const fullPath = vaultPathFor(mapping, action.path);
@@ -511,6 +533,7 @@ export class SyncEngine {
   private async buildAndPushCommit(
     client: GitHubClient,
     mapping: FolderMapping,
+    destination: MappingDestination,
     baseCommitSha: string,
     baseTreeSha: string,
     pushActions: FileAction[],
@@ -523,7 +546,7 @@ export class SyncEngine {
     const changedFiles: string[] = [];
 
     for (const action of pushActions) {
-      const fullRepoPath = repoPathFor(mapping, action.path);
+      const fullRepoPath = repoPathFor(destination, action.path);
       changedFiles.push(action.path);
       if (action.op === "push-delete") {
         treeEntries.push({
@@ -541,8 +564,8 @@ export class SyncEngine {
       const content = await this.readVaultFile(mapping, action.path);
       const blobSha = await createBlob(
         client,
-        mapping.repoOwner,
-        mapping.repoName,
+        destination.repoOwner,
+        destination.repoName,
         content.base64,
       );
       treeEntries.push({
@@ -557,8 +580,8 @@ export class SyncEngine {
 
     const newTreeSha = await createTree(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
+      destination.repoOwner,
+      destination.repoName,
       baseTreeSha,
       treeEntries,
     );
@@ -573,17 +596,17 @@ export class SyncEngine {
     });
     const newCommitSha = await createCommit(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
+      destination.repoOwner,
+      destination.repoName,
       message,
       newTreeSha,
       [baseCommitSha],
     );
     const ok = await updateRef(
       client,
-      mapping.repoOwner,
-      mapping.repoName,
-      mapping.branch,
+      destination.repoOwner,
+      destination.repoName,
+      destination.branch,
       newCommitSha,
     );
     if (!ok) return null;
@@ -632,8 +655,13 @@ export function isRewriteEnabled(mapping: FolderMapping): boolean {
   return mapping.rewriteWikilinks !== false;
 }
 
+/** Short "owner/repo:branch/path" label for messages and modal titles. */
+export function destinationLabel(d: MappingDestination): string {
+  const remote = d.remoteFolder || "/";
+  return `${d.repoOwner}/${d.repoName}:${d.branch}/${remote}`;
+}
+
 function computeNewState(
-  mapping: FolderMapping,
   newCommitSha: string,
   baseTreeSha: string,
   actions: FileAction[],
@@ -703,8 +731,8 @@ export function isVaultRoot(vaultFolder: string): boolean {
   return trimmed === "" || trimmed === "/";
 }
 
-function repoPathFor(mapping: FolderMapping, relPath: string): string {
-  const folder = mapping.remoteFolder.replace(/^\/+|\/+$/g, "");
+function repoPathFor(destination: MappingDestination, relPath: string): string {
+  const folder = destination.remoteFolder.replace(/^\/+|\/+$/g, "");
   return folder ? `${folder}/${relPath}` : relPath;
 }
 

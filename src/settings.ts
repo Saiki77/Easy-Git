@@ -48,11 +48,12 @@ export class EasyGitSettingTab extends PluginSettingTab {
       const mapping = this.plugin.settings.mappings.find((m) => m.id === id);
       if (!mapping) continue;
       const isSyncing = this.plugin.isSyncing(id);
+      const anyErrored = (mapping.destinations ?? []).some((d) => !!d.lastSyncError);
       refs.syncBtn.disabled = isSyncing;
       refs.syncBtn.setText(isSyncing ? "Syncing…" : "Sync");
       refs.statusEl.setText(statusText(mapping, isSyncing));
       refs.statusEl.toggleClass("is-syncing", isSyncing);
-      refs.statusEl.toggleClass("is-error", !isSyncing && !!mapping.lastSyncError);
+      refs.statusEl.toggleClass("is-error", !isSyncing && anyErrored);
     }
   }
 
@@ -191,12 +192,13 @@ export class EasyGitSettingTab extends PluginSettingTab {
       text: summarizeMapping(mapping),
     });
     const isSyncing = this.plugin.isSyncing(mapping.id);
+    const anyErrored = (mapping.destinations ?? []).some((d) => !!d.lastSyncError);
     const statusEl = info.createDiv({
       cls: "easy-git-mapping-status",
       text: statusText(mapping, isSyncing),
     });
     if (isSyncing) statusEl.addClass("is-syncing");
-    else if (mapping.lastSyncError) statusEl.addClass("is-error");
+    else if (anyErrored) statusEl.addClass("is-error");
 
     const actions = row.createDiv({ cls: "easy-git-mapping-actions" });
     actions.createSpan({
@@ -335,9 +337,16 @@ export class EasyGitSettingTab extends PluginSettingTab {
 
 function summarizeMapping(m: FolderMapping): string {
   const vault = isVaultRootFolder(m.vaultFolder) ? "Whole vault" : m.vaultFolder;
-  const remoteFolder = m.remoteFolder || "/";
   const raw = m.rewriteWikilinks === false ? "  (raw wikilinks)" : "";
-  return `${vault} ↔ ${m.repoOwner}/${m.repoName}:${m.branch}/${remoteFolder}${raw}`;
+  const destinations = m.destinations ?? [];
+  if (destinations.length === 0) {
+    return `${vault} ↔ (no destinations)${raw}`;
+  }
+  const first = destinations[0];
+  const remoteFolder = first.remoteFolder || "/";
+  const head = `${first.repoOwner}/${first.repoName}:${first.branch}/${remoteFolder}`;
+  const more = destinations.length > 1 ? `  +${destinations.length - 1} more` : "";
+  return `${vault} ↔ ${head}${more}${raw}`;
 }
 
 function isVaultRootFolder(vaultFolder: string): boolean {
@@ -347,9 +356,26 @@ function isVaultRootFolder(vaultFolder: string): boolean {
 
 function statusText(m: FolderMapping, isSyncing = false): string {
   if (isSyncing) return "Syncing…";
-  if (m.lastSyncError) return "Last sync error: " + m.lastSyncError;
-  if (m.lastSyncAt) {
-    const minutes = Math.floor((Date.now() - m.lastSyncAt) / 60_000);
+  const destinations = m.destinations ?? [];
+
+  // Aggregate across destinations: any error → show one error; else the
+  // most recent successful sync time.
+  const errored = destinations.find((d) => d.lastSyncError);
+  if (errored) {
+    const prefix =
+      destinations.length > 1
+        ? `Last sync error (${errored.repoOwner}/${errored.repoName}): `
+        : "Last sync error: ";
+    return prefix + errored.lastSyncError;
+  }
+  let mostRecent: number | undefined;
+  for (const d of destinations) {
+    if (d.lastSyncAt && (!mostRecent || d.lastSyncAt > mostRecent)) {
+      mostRecent = d.lastSyncAt;
+    }
+  }
+  if (mostRecent) {
+    const minutes = Math.floor((Date.now() - mostRecent) / 60_000);
     if (minutes < 1) return "Synced just now";
     if (minutes < 60) return `Synced ${minutes}m ago`;
     const hours = Math.floor(minutes / 60);

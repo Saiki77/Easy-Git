@@ -41,7 +41,9 @@ Either works for private repos.
 
 ## Add a folder mapping
 
-Settings → Easy Git → **+ Add mapping**. Pick the vault folder (or the vault root for whole-vault sync), the repo, the branch, the path inside the repo, the direction (push only, pull only, or both), and how often to sync (manual, on interval, on startup, or on save). Save.
+Settings → Easy Git → **+ Add mapping**. Pick the vault folder (or the vault root for whole-vault sync), add one or more destinations (each = repo + branch + path inside the repo), the direction (push only, pull only, or both), and how often to sync (manual, on interval, on startup, or on save). Save.
+
+A single mapping can push to multiple destinations at once — useful for mirroring the same vault folder to several repos, or for syncing to several subfolders of one bigger repo (e.g. a static site where `Notes/blog` → `src/content/blog`, `Notes/projects` → `src/content/projects`). Destinations sync sequentially; each one tracks its own last-sync state, so one destination's hiccup doesn't block the others.
 
 If you rename or move the mapping's folder inside Obsidian later, Easy Git updates the mapping path automatically and shows a Notice. If the folder is missing entirely (deleted, or moved while Obsidian was closed), the next sync aborts with a clear error instead of interpreting the missing folder as "delete everything on the remote."
 

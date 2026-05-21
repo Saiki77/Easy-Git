@@ -12,8 +12,11 @@ import {
   ConflictEntry,
   DEFAULT_SETTINGS,
   FolderMapping,
+  MappingDestination,
   PluginSettings,
+  makeId,
 } from "./types";
+import { destinationLabel } from "./sync/engine";
 import { EasyGitSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
@@ -53,7 +56,8 @@ export default class EasyGitPlugin extends Plugin {
       app: this.app,
       settings: this.settings,
       saveSettings: () => this.saveData(this.settings),
-      resolveConflicts: (mapping, conflicts) => this.openConflictModal(mapping, conflicts),
+      resolveConflicts: (mapping, destination, conflicts) =>
+        this.openConflictModal(mapping, destination, conflicts),
     });
 
     this.settingsTab = new EasyGitSettingTab(this.app, this);
@@ -140,11 +144,14 @@ export default class EasyGitPlugin extends Plugin {
   private computeStatusState(): StatusState {
     const mappings = this.settings?.mappings ?? [];
     const anySyncing = this.syncing.size > 0;
-    const anyErrored = mappings.some((m) => !!m.lastSyncError);
+    let anyErrored = false;
     let mostRecentSync: number | undefined;
     for (const m of mappings) {
-      if (m.lastSyncAt && (!mostRecentSync || m.lastSyncAt > mostRecentSync)) {
-        mostRecentSync = m.lastSyncAt;
+      for (const d of m.destinations ?? []) {
+        if (d.lastSyncError) anyErrored = true;
+        if (d.lastSyncAt && (!mostRecentSync || d.lastSyncAt > mostRecentSync)) {
+          mostRecentSync = d.lastSyncAt;
+        }
       }
     }
     return {
@@ -202,6 +209,52 @@ export default class EasyGitPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data ?? {});
+    if (this.migrateLegacyMappings()) {
+      await this.saveSettings();
+    }
+  }
+
+  /**
+   * One-time migration from the pre-0.5 single-destination shape to the
+   * multi-destination shape. Returns true if any mapping was rewritten.
+   */
+  private migrateLegacyMappings(): boolean {
+    let changed = false;
+    for (const m of this.settings.mappings) {
+      const legacy = m as unknown as {
+        repoOwner?: string;
+        repoName?: string;
+        branch?: string;
+        remoteFolder?: string;
+        lastSyncState?: import("./types").LastSyncState;
+        lastSyncAt?: number;
+        lastSyncError?: string;
+        destinations?: MappingDestination[];
+      };
+      if (Array.isArray(legacy.destinations) && legacy.destinations.length > 0) {
+        continue;
+      }
+      const dest: MappingDestination = {
+        id: makeId(),
+        repoOwner: legacy.repoOwner ?? "",
+        repoName: legacy.repoName ?? "",
+        branch: legacy.branch ?? "",
+        remoteFolder: legacy.remoteFolder ?? "",
+        lastSyncState: legacy.lastSyncState,
+        lastSyncAt: legacy.lastSyncAt,
+        lastSyncError: legacy.lastSyncError,
+      };
+      m.destinations = [dest];
+      delete legacy.repoOwner;
+      delete legacy.repoName;
+      delete legacy.branch;
+      delete legacy.remoteFolder;
+      delete legacy.lastSyncState;
+      delete legacy.lastSyncAt;
+      delete legacy.lastSyncError;
+      changed = true;
+    }
+    return changed;
   }
 
   async saveSettings(): Promise<void> {
@@ -308,40 +361,11 @@ export default class EasyGitPlugin extends Plugin {
       if (this.settings.debugLogging) {
         console.log(`[Easy Git] sync start (${trigger}) — ${mapping.name}`);
       }
-      const result = await this.engine.syncMapping(mapping);
+      const results = await this.engine.syncMapping(mapping);
       if (this.settings.debugLogging) {
-        console.log(`[Easy Git] sync result`, result);
+        console.log(`[Easy Git] sync results`, results);
       }
-      if (!result.ok && result.error) {
-        mapping.lastSyncError = result.error;
-        await this.saveSettings();
-        if (this.settings.showNotifications) {
-          new Notice(`Easy Git (${mapping.name}): ${result.error}`);
-        }
-      } else if (result.ok) {
-        if (this.settings.showNotifications) {
-          const total = result.added + result.modified + result.deleted;
-          const summary =
-            total === 0
-              ? "up to date"
-              : `${result.added}+ ${result.modified}~ ${result.deleted}-`;
-          new Notice(`Easy Git (${mapping.name}): ${summary}`);
-        }
-        if (result.skippedLarge && result.skippedLarge.length > 0) {
-          new Notice(
-            `Easy Git (${mapping.name}): skipped ${result.skippedLarge.length} file(s) over size limit.`,
-          );
-        }
-        if (
-          result.unresolvedWikilinks &&
-          result.unresolvedWikilinks > 0 &&
-          this.settings.showNotifications
-        ) {
-          new Notice(
-            `Easy Git (${mapping.name}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
-          );
-        }
-      }
+      this.reportSyncResults(mapping, results);
     } finally {
       this.syncing.delete(id);
       this.statusBar?.refresh();
@@ -350,6 +374,50 @@ export default class EasyGitPlugin extends Plugin {
         this.pendingAfterSync.delete(id);
         // schedule another run on a microtask so we don't recurse the stack
         setTimeout(() => void this.syncMapping(id, "on-save"), 0);
+      }
+    }
+  }
+
+  /**
+   * Surface one Notice per destination result. With one destination, this
+   * reads exactly like the v0.4 flow. With multiple, the destination label
+   * disambiguates which target each line refers to.
+   */
+  private reportSyncResults(
+    mapping: FolderMapping,
+    results: import("./types").SyncResult[],
+  ): void {
+    const showLabel = mapping.destinations.length > 1;
+    for (const result of results) {
+      const dest = mapping.destinations.find((d) => d.id === result.destinationId);
+      const label = showLabel && dest ? ` → ${destinationLabel(dest)}` : "";
+      if (!result.ok && result.error) {
+        if (this.settings.showNotifications) {
+          new Notice(`Easy Git (${mapping.name}${label}): ${result.error}`);
+        }
+      } else if (result.ok) {
+        if (this.settings.showNotifications) {
+          const total = result.added + result.modified + result.deleted;
+          const summary =
+            total === 0
+              ? "up to date"
+              : `${result.added}+ ${result.modified}~ ${result.deleted}-`;
+          new Notice(`Easy Git (${mapping.name}${label}): ${summary}`);
+        }
+        if (result.skippedLarge && result.skippedLarge.length > 0 && this.settings.showNotifications) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): skipped ${result.skippedLarge.length} file(s) over size limit.`,
+          );
+        }
+        if (
+          result.unresolvedWikilinks &&
+          result.unresolvedWikilinks > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
+          );
+        }
       }
     }
   }
@@ -422,10 +490,15 @@ export default class EasyGitPlugin extends Plugin {
 
   private async openConflictModal(
     mapping: FolderMapping,
+    destination: MappingDestination,
     conflicts: ConflictEntry[],
   ): Promise<ConflictEntry[] | null> {
+    const title =
+      mapping.destinations.length > 1
+        ? `${mapping.name} → ${destinationLabel(destination)}`
+        : mapping.name;
     return new Promise((resolve) => {
-      new ConflictResolutionModal(this.app, mapping.name, conflicts, (result) => {
+      new ConflictResolutionModal(this.app, title, conflicts, (result) => {
         if (!result.applied) {
           resolve(null);
           return;

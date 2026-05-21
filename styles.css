@@ -140,6 +140,69 @@
   padding: 0.5rem 0;
 }
 
+.easy-git-section-header {
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.easy-git-section-header h3 {
+  margin: 0.25rem 0 0;
+  font-size: 1.05em;
+}
+
+.easy-git-section-sub {
+  margin: 0.15rem 0 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.easy-git-destinations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.easy-git-destination-card {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.easy-git-destination-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.easy-git-destination-label {
+  width: 6.5rem;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.easy-git-destination-row input[type="text"] {
+  flex: 1;
+  padding: 0.25rem 0.4rem;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-normal);
+}
+
+.easy-git-destination-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.15rem;
+}
+
 .easy-git-picker-button {
   min-width: 12rem;
   text-align: left;

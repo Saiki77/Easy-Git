@@ -18,14 +18,26 @@ export interface LastSyncState {
   files: Record<string, FileSyncRecord>;
 }
 
-export interface FolderMapping {
+/**
+ * One sync target inside a mapping. A mapping can have several of these to
+ * push the same vault folder to multiple repos / branches / remote paths.
+ * Each destination tracks its own last-sync state.
+ */
+export interface MappingDestination {
   id: string;
-  name: string;
-  vaultFolder: string;
   repoOwner: string;
   repoName: string;
   branch: string;
   remoteFolder: string;
+  lastSyncState?: LastSyncState;
+  lastSyncAt?: number;
+  lastSyncError?: string;
+}
+
+export interface FolderMapping {
+  id: string;
+  name: string;
+  vaultFolder: string;
   direction: SyncDirection;
   autoMode: AutoMode;
   commitTemplate?: string;
@@ -39,9 +51,8 @@ export interface FolderMapping {
   /** Set to true the first time the engine has auto-enabled rewriteWikilinks
    * (so the migration Notice fires once, not on every sync). */
   rewriteWikilinksMigrated?: boolean;
-  lastSyncState?: LastSyncState;
-  lastSyncAt?: number;
-  lastSyncError?: string;
+  /** One or more remote targets. v0.5+ schema. */
+  destinations: MappingDestination[];
 }
 
 export interface GitHubAuth {
@@ -106,6 +117,7 @@ export interface FileAction {
 
 export interface SyncResult {
   mappingId: string;
+  destinationId: string;
   ok: boolean;
   added: number;
   modified: number;
