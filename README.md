@@ -24,7 +24,12 @@ Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where
 
 ## Install
 
-**Via BRAT** (recommended while the community-plugin submission is in review)
+**From inside Obsidian** (recommended)
+
+1. Settings → Community plugins → **Browse**.
+2. Search **Easy Git** and click **Install**, then **Enable**.
+
+**Via BRAT** (for early-access builds between releases)
 
 1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin.
 2. BRAT settings → **Add Beta Plugin** → paste `Saiki77/Easy-Git`.
