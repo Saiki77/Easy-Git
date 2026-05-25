@@ -62,6 +62,29 @@ export interface GitHubAuth {
   scopes?: string[];
 }
 
+export interface SyncLogEntry {
+  /** Epoch ms when the sync run finished. */
+  timestamp: number;
+  mappingId: string;
+  mappingName: string;
+  destinationId: string;
+  destinationLabel: string;
+  trigger: string;
+  ok: boolean;
+  added: number;
+  modified: number;
+  deleted: number;
+  conflicts: number;
+  /** Total files touched (added + modified + deleted). */
+  filesTouched: number;
+  /** First few changed paths for the expanded view. */
+  changedPaths?: string[];
+  /** Truncated free-form error string, including file path context. */
+  error?: string;
+  /** Wall clock duration of the sync run. */
+  durationMs: number;
+}
+
 export interface PluginSettings {
   auth: GitHubAuth;
   mappings: FolderMapping[];
@@ -70,7 +93,11 @@ export interface PluginSettings {
   maxFileSizeBytes: number;
   showNotifications: boolean;
   debugLogging: boolean;
+  /** Most-recent sync log entries, capped at SYNC_LOG_MAX. Newest first. */
+  syncLog?: SyncLogEntry[];
 }
+
+export const SYNC_LOG_MAX = 100;
 
 export const DEFAULT_SETTINGS: PluginSettings = {
   auth: { method: "none", token: "" },
@@ -132,6 +159,8 @@ export interface SyncResult {
   unresolvedWikilinks?: number;
   /** Number of wikilinks actually rewritten across this run. */
   rewrittenWikilinks?: number;
+  /** Paths that were added/modified/deleted in this run (push or pull side). */
+  changedPaths?: string[];
 }
 
 export interface LocalFileEntry {

@@ -292,13 +292,17 @@ export class SyncEngine {
     await this.deps.saveSettings();
 
     // 10. Counts for the result.
+    const changedPaths: string[] = [];
     for (const a of actions) {
+      if (a.op === "noop") continue;
+      changedPaths.push(a.path);
       if (a.op === "push-add" || a.op === "pull-add") baseResult.added += 1;
       else if (a.op === "push-modify" || a.op === "pull-modify") baseResult.modified += 1;
       else if (a.op === "push-delete" || a.op === "pull-delete") baseResult.deleted += 1;
     }
     baseResult.commitSha = newCommitSha;
     baseResult.conflicts = plan.conflicts.map((c) => ({ ...c }));
+    baseResult.changedPaths = changedPaths;
 
     const destLabel = destinationLabel(destination);
     if (mapping.direction === "push" && plan.informationalRemoteChanges.length > 0) {
@@ -491,30 +495,63 @@ export class SyncEngine {
     client: GitHubClient,
   ): Promise<void> {
     if (!action.remoteSha) return;
-    const blob = await getBlobContent(
-      client,
-      destination.repoOwner,
-      destination.repoName,
-      action.remoteSha,
-    );
     const fullPath = vaultPathFor(mapping, action.path);
-    await ensureVaultFolder(this.deps.app, parentOf(fullPath));
-    const existing = this.deps.app.vault.getFileByPath(fullPath);
-    const isText = isLikelyTextPath(fullPath) && blob.encoding !== "base64-binary";
-    if (isText) {
-      const text = base64ToString(blob.content);
-      if (existing) {
-        await this.deps.app.vault.modify(existing, text);
+    try {
+      const blob = await getBlobContent(
+        client,
+        destination.repoOwner,
+        destination.repoName,
+        action.remoteSha,
+      );
+      await ensureVaultFolder(this.deps.app, parentOf(fullPath));
+      const existing =
+        this.deps.app.vault.getFileByPath(fullPath) ??
+        findFileCaseInsensitive(this.deps.app, fullPath);
+      const isText = isLikelyTextPath(fullPath) && blob.encoding !== "base64-binary";
+      if (isText) {
+        const text = base64ToString(blob.content);
+        if (existing) {
+          await this.deps.app.vault.modify(existing, text);
+        } else {
+          await this.createOrFallbackText(fullPath, text);
+        }
       } else {
-        await this.deps.app.vault.create(fullPath, text);
+        const buf = base64ToArrayBuffer(blob.content);
+        if (existing) {
+          await this.deps.app.vault.modifyBinary(existing, buf);
+        } else {
+          await this.createOrFallbackBinary(fullPath, buf);
+        }
       }
-    } else {
-      const buf = base64ToArrayBuffer(blob.content);
-      if (existing) {
-        await this.deps.app.vault.modifyBinary(existing, buf);
-      } else {
-        await this.deps.app.vault.createBinary(fullPath, buf);
-      }
+    } catch (e) {
+      throw annotateWithPath(e, fullPath);
+    }
+  }
+
+  /**
+   * Create a text file; if the path is already taken (case-insensitive
+   * collision on a case-insensitive filesystem), fall back to modify on the
+   * existing file rather than failing the whole sync.
+   */
+  private async createOrFallbackText(path: string, text: string): Promise<void> {
+    try {
+      await this.deps.app.vault.create(path, text);
+    } catch (e) {
+      if (!/already exists/i.test(String(e))) throw e;
+      const existing = findFileCaseInsensitive(this.deps.app, path);
+      if (!existing) throw e;
+      await this.deps.app.vault.modify(existing, text);
+    }
+  }
+
+  private async createOrFallbackBinary(path: string, buf: ArrayBuffer): Promise<void> {
+    try {
+      await this.deps.app.vault.createBinary(path, buf);
+    } catch (e) {
+      if (!/already exists/i.test(String(e))) throw e;
+      const existing = findFileCaseInsensitive(this.deps.app, path);
+      if (!existing) throw e;
+      await this.deps.app.vault.modifyBinary(existing, buf);
     }
   }
 
@@ -523,8 +560,14 @@ export class SyncEngine {
     action: FileAction,
   ): Promise<void> {
     const fullPath = vaultPathFor(mapping, action.path);
-    const existing = this.deps.app.vault.getFileByPath(fullPath);
-    if (existing) await this.deps.app.vault.delete(existing);
+    try {
+      const existing =
+        this.deps.app.vault.getFileByPath(fullPath) ??
+        findFileCaseInsensitive(this.deps.app, fullPath);
+      if (existing) await this.deps.app.vault.delete(existing);
+    } catch (e) {
+      throw annotateWithPath(e, fullPath);
+    }
   }
 
   private async renameInVault(
@@ -794,6 +837,32 @@ async function ensureVaultFolder(app: App, path: string): Promise<void> {
   await app.vault.createFolder(path).catch((e) => {
     if (!/already exists/i.test(String(e))) throw e;
   });
+}
+
+/**
+ * Last-resort lookup for case-insensitive filesystem collisions. On macOS/
+ * Windows, `getFileByPath("Foo.md")` returns null even if `foo.md` exists,
+ * but vault.create then fails because the underlying disk has the file.
+ */
+function findFileCaseInsensitive(app: App, path: string): TFile | null {
+  const lower = path.toLowerCase();
+  for (const f of app.vault.getFiles()) {
+    if (f.path.toLowerCase() === lower) return f;
+  }
+  return null;
+}
+
+/**
+ * Wrap a thrown error so the user-facing message includes which vault path
+ * the operation was acting on. Preserves the original Error type when the
+ * inner value is an Error; otherwise produces a fresh Error.
+ */
+function annotateWithPath(err: unknown, path: string): Error {
+  const original = err instanceof Error ? err.message : String(err);
+  if (original.includes(path)) return err instanceof Error ? err : new Error(original);
+  const wrapped = new Error(`${original} (at "${path}")`);
+  if (err instanceof Error && err.stack) wrapped.stack = err.stack;
+  return wrapped;
 }
 
 function delay(ms: number): Promise<void> {

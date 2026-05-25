@@ -175,12 +175,19 @@ export class EasyGitSettingTab extends PluginSettingTab {
       }
     }
 
-    new Setting(parent).addButton((b) =>
-      b
-        .setButtonText("+ Add mapping")
-        .setCta()
-        .onClick(() => this.openMappingModal()),
-    );
+    new Setting(parent)
+      .addButton((b) =>
+        b
+          .setButtonText("+ Add mapping")
+          .setCta()
+          .onClick(() => this.openMappingModal()),
+      )
+      .addButton((b) =>
+        b
+          .setButtonText("View sync log")
+          .setTooltip("See recent sync runs, errors, and which files were touched")
+          .onClick(() => this.plugin.openSyncLog()),
+      );
   }
 
   private renderMappingRow(parent: HTMLElement, mapping: FolderMapping): void {

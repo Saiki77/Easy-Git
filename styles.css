@@ -203,6 +203,116 @@
   margin-top: 0.15rem;
 }
 
+.easy-git-sync-log .easy-git-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+}
+
+.easy-git-log-row {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+
+.easy-git-log-row.is-error {
+  border-left: 3px solid var(--text-error);
+}
+
+.easy-git-log-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.easy-git-log-status {
+  font-weight: 700;
+  font-size: 1.1em;
+  width: 1.25rem;
+  flex-shrink: 0;
+  color: var(--text-success, #16a34a);
+}
+
+.easy-git-log-row.is-error .easy-git-log-status {
+  color: var(--text-error);
+}
+
+.easy-git-log-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.easy-git-log-title {
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.easy-git-log-sub {
+  font-size: 0.82em;
+  color: var(--text-muted);
+  margin-top: 0.1rem;
+}
+
+.easy-git-log-summary {
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.easy-git-log-error {
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--background-primary);
+  border: 1px solid var(--text-error);
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  color: var(--text-error);
+  word-break: break-all;
+}
+
+.easy-git-log-files {
+  margin-top: 0.4rem;
+  font-size: 0.85em;
+}
+
+.easy-git-log-files-label {
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.easy-git-log-files ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  list-style-type: disc;
+}
+
+.easy-git-log-files li {
+  font-family: var(--font-monospace);
+  color: var(--text-normal);
+}
+
+.easy-git-log-files-more {
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 0.2rem;
+}
+
+.easy-git-log-conflicts {
+  margin-top: 0.4rem;
+  font-size: 0.85em;
+  color: var(--text-accent);
+}
+
 .easy-git-picker-button {
   min-width: 12rem;
   text-align: left;

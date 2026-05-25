@@ -14,9 +14,13 @@ import {
   FolderMapping,
   MappingDestination,
   PluginSettings,
+  SYNC_LOG_MAX,
+  SyncLogEntry,
+  SyncResult,
   makeId,
 } from "./types";
 import { destinationLabel } from "./sync/engine";
+import { SyncLogModal } from "./ui/sync-log-modal";
 import { EasyGitSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
@@ -112,6 +116,12 @@ export default class EasyGitPlugin extends Plugin {
         // @ts-expect-error setting is private but accessible at runtime
         this.app.setting.openTabById(this.manifest.id);
       },
+    });
+
+    this.addCommand({
+      id: "easy-git-show-log",
+      name: "Show sync log",
+      callback: () => this.openSyncLog(),
     });
 
     // Status bar indicator — shows aggregate sync state, clicks to open settings.
@@ -365,6 +375,8 @@ export default class EasyGitPlugin extends Plugin {
       if (this.settings.debugLogging) {
         console.log(`[Easy Git] sync results`, results);
       }
+      for (const r of results) this.recordSyncResult(mapping, r, trigger);
+      await this.saveSettings();
       this.reportSyncResults(mapping, results);
     } finally {
       this.syncing.delete(id);
@@ -378,6 +390,48 @@ export default class EasyGitPlugin extends Plugin {
     }
   }
 
+  openSyncLog(): void {
+    new SyncLogModal(this.app, {
+      entries: this.settings.syncLog ?? [],
+      onClear: async () => {
+        this.settings.syncLog = [];
+        await this.saveSettings();
+      },
+    }).open();
+  }
+
+  /**
+   * Append a single sync run to the persistent log, capped at SYNC_LOG_MAX.
+   */
+  private recordSyncResult(
+    mapping: FolderMapping,
+    result: SyncResult,
+    trigger: string,
+  ): void {
+    const dest = mapping.destinations.find((d) => d.id === result.destinationId);
+    const entry: SyncLogEntry = {
+      timestamp: Date.now(),
+      mappingId: mapping.id,
+      mappingName: mapping.name,
+      destinationId: result.destinationId,
+      destinationLabel: dest ? destinationLabel(dest) : "(unknown)",
+      trigger,
+      ok: result.ok,
+      added: result.added,
+      modified: result.modified,
+      deleted: result.deleted,
+      conflicts: result.conflicts.length,
+      filesTouched: result.added + result.modified + result.deleted,
+      changedPaths: result.changedPaths,
+      error: result.error,
+      durationMs: result.durationMs,
+    };
+    const log = this.settings.syncLog ?? [];
+    log.unshift(entry);
+    if (log.length > SYNC_LOG_MAX) log.length = SYNC_LOG_MAX;
+    this.settings.syncLog = log;
+  }
+
   /**
    * Surface one Notice per destination result. With one destination, this
    * reads exactly like the v0.4 flow. With multiple, the destination label
@@ -385,7 +439,7 @@ export default class EasyGitPlugin extends Plugin {
    */
   private reportSyncResults(
     mapping: FolderMapping,
-    results: import("./types").SyncResult[],
+    results: SyncResult[],
   ): void {
     const showLabel = mapping.destinations.length > 1;
     for (const result of results) {
