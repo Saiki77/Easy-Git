@@ -1,0 +1,64 @@
+name: Bug report
+description: Something isn't working as expected.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. Before opening, please check the
+        [Sync log](https://github.com/Saiki77/Easy-Git#sync-log) inside Obsidian
+        (command palette → `Easy Git: Show sync log`) — the exact error message and
+        the file path it references go a long way toward a quick fix.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A short description of the problem. What did you expect, and what did you see?
+      placeholder: "I tried to sync mapping X, and ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that trigger the issue.
+      placeholder: |
+        1. Create a mapping with vault folder "..."
+        2. Add a destination pointing at "..."
+        3. Click Sync
+        4. See "..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: sync-log
+    attributes:
+      label: Sync log entry
+      description: Open `Easy Git: Show sync log`, find the failed run, and paste its full error text + the list of files it shows.
+      render: text
+
+  - type: input
+    id: easy-git-version
+    attributes:
+      label: Easy Git version
+      description: See manifest.json in the plugin folder, or the directory page.
+      placeholder: "e.g. 1.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian version + platform
+      placeholder: "e.g. 1.6.7 on macOS 14.5 (Apple Silicon)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else worth knowing — vault size, mapping direction, whether wikilink rewrite is on, mapping uses multiple destinations, etc.

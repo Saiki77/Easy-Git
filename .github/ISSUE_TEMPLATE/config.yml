@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Obsidian Forum — Share & Showcase
+    url: https://forum.obsidian.md/c/share-showcase/9
+    about: General questions about using the plugin, or feedback that isn't a bug or feature.
+  - name: Obsidian Discord
+    url: https://discord.gg/veuWUTm
+    about: Live chat with the Obsidian community. Plugin-specific channels exist for quick help.

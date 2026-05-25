@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Easy Git is intentionally narrow in scope (folder ↔ GitHub repo sync). Features
+        that would push it toward being a full git client (branch management, restore
+        from commit, GPG signing, etc.) probably won't be accepted. Other ideas are
+        welcome — describe the use case and we'll talk about whether it fits.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem are you trying to solve? Describe the workflow you'd like to support.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A rough idea of how it could work in the plugin's UI or behaviour. Optional.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways you've thought about solving the same problem, or workarounds you're using today.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Anything else — screenshots, links to related tools, etc.
