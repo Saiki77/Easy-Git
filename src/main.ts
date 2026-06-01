@@ -217,11 +217,29 @@ export default class EasyGitPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data ?? {});
-    if (this.migrateLegacyMappings()) {
-      await this.saveSettings();
+    let data: unknown = null;
+    try {
+      data = await this.loadData();
+    } catch (e) {
+      // Corrupted data.json (truncated, hand-edited, etc.) — fall back to
+      // defaults rather than failing to load the plugin entirely. The user
+      // can re-add mappings from scratch; nothing in the vault is touched.
+      console.error("Easy Git: failed to read plugin data, using defaults.", e);
+      new Notice(
+        "Easy Git: could not read saved settings (data.json may be corrupted). Started with defaults.",
+        10_000,
+      );
+      data = null;
     }
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      (data as Partial<PluginSettings>) ?? {},
+    );
+    let dirty = false;
+    if (this.migrateLegacyMappings()) dirty = true;
+    if (this.healSettings()) dirty = true;
+    if (dirty) await this.saveSettings();
   }
 
   /**
@@ -265,6 +283,201 @@ export default class EasyGitPlugin extends Plugin {
       changed = true;
     }
     return changed;
+  }
+
+  /**
+   * Idempotent settings self-heal. Runs every load.
+   *
+   * Fixes drift, mojibake, and silent corruption without losing user data:
+   * normalizes paths, clamps numeric ranges, repairs auth state, regenerates
+   * missing IDs, tops up the excluded-paths list with safe additions made in
+   * newer versions. NEVER deletes a mapping or destination — broken ones
+   * stay so the user sees them in settings and can fix or remove them.
+   *
+   * Returns true if anything was changed (so caller can persist).
+   */
+  private healSettings(): boolean {
+    let dirty = false;
+    const s = this.settings;
+
+    // --- Auth state ---
+    if (!s.auth || typeof s.auth !== "object") {
+      s.auth = { method: "none", token: "" };
+      dirty = true;
+    }
+    if (s.auth.method !== "none" && !s.auth.token) {
+      // Half-cleared state — treat as signed out.
+      s.auth = { method: "none", token: "" };
+      dirty = true;
+    }
+
+    // --- Numeric clamps ---
+    if (
+      typeof s.maxFileSizeBytes !== "number" ||
+      !Number.isFinite(s.maxFileSizeBytes) ||
+      s.maxFileSizeBytes < 1024
+    ) {
+      s.maxFileSizeBytes = DEFAULT_SETTINGS.maxFileSizeBytes;
+      dirty = true;
+    }
+    if (
+      s.backupRetentionDays !== undefined &&
+      (typeof s.backupRetentionDays !== "number" ||
+        !Number.isFinite(s.backupRetentionDays) ||
+        s.backupRetentionDays < 0)
+    ) {
+      s.backupRetentionDays = 0;
+      dirty = true;
+    }
+
+    // --- Excluded paths: keep user entries; ensure the safety set is in. ---
+    const safeExcludes = [
+      ".easy-git-backup/**",
+      ".DS_Store",
+      ".trash/**",
+      ".obsidian/**",
+      ".git/**",
+    ];
+    if (!Array.isArray(s.excludedPaths)) {
+      s.excludedPaths = [...DEFAULT_SETTINGS.excludedPaths];
+      dirty = true;
+    }
+    for (const safe of safeExcludes) {
+      if (!s.excludedPaths.includes(safe)) {
+        s.excludedPaths.push(safe);
+        dirty = true;
+      }
+    }
+
+    // --- Mappings ---
+    if (!Array.isArray(s.mappings)) {
+      s.mappings = [];
+      dirty = true;
+    }
+    for (const m of s.mappings) {
+      if (!m.id) {
+        m.id = makeId();
+        dirty = true;
+      }
+      if (typeof m.name !== "string" || !m.name.trim()) {
+        m.name = "Untitled mapping";
+        dirty = true;
+      }
+      // Normalize vault folder: strip leading/trailing slashes, treat "/" as "".
+      if (typeof m.vaultFolder === "string") {
+        const norm = m.vaultFolder.trim().replace(/^\/+|\/+$/g, "");
+        if (norm !== m.vaultFolder) {
+          m.vaultFolder = norm;
+          dirty = true;
+        }
+      } else {
+        m.vaultFolder = "";
+        dirty = true;
+      }
+      // Ensure direction is one of the allowed values.
+      if (
+        m.direction !== "push" &&
+        m.direction !== "pull" &&
+        m.direction !== "both"
+      ) {
+        m.direction = "both";
+        dirty = true;
+      }
+      // Clamp autoMode shape.
+      if (!m.autoMode || typeof m.autoMode !== "object") {
+        m.autoMode = { kind: "off" };
+        dirty = true;
+      } else if (m.autoMode.kind === "interval") {
+        if (
+          typeof m.autoMode.minutes !== "number" ||
+          !Number.isFinite(m.autoMode.minutes) ||
+          m.autoMode.minutes < 1
+        ) {
+          m.autoMode.minutes = 15;
+          dirty = true;
+        }
+      } else if (m.autoMode.kind === "onSave") {
+        if (
+          typeof m.autoMode.debounceMs !== "number" ||
+          !Number.isFinite(m.autoMode.debounceMs) ||
+          m.autoMode.debounceMs < 500
+        ) {
+          m.autoMode.debounceMs = 10_000;
+          dirty = true;
+        }
+      } else if (
+        m.autoMode.kind !== "off" &&
+        m.autoMode.kind !== "startup"
+      ) {
+        m.autoMode = { kind: "off" };
+        dirty = true;
+      }
+      // Destinations.
+      if (!Array.isArray(m.destinations)) {
+        m.destinations = [];
+        dirty = true;
+      }
+      const seenIds = new Set<string>();
+      for (const d of m.destinations) {
+        if (!d.id || seenIds.has(d.id)) {
+          d.id = makeId();
+          dirty = true;
+        }
+        seenIds.add(d.id);
+        for (const field of ["repoOwner", "repoName", "branch", "remoteFolder"] as const) {
+          if (typeof d[field] !== "string") {
+            d[field] = "";
+            dirty = true;
+          }
+        }
+        // Normalize remoteFolder: strip leading/trailing slashes.
+        const remoteNorm = d.remoteFolder.replace(/^\/+|\/+$/g, "");
+        if (remoteNorm !== d.remoteFolder) {
+          d.remoteFolder = remoteNorm;
+          dirty = true;
+        }
+      }
+    }
+
+    return dirty;
+  }
+
+  /**
+   * Returns true when this mapping isn't safe to sync as-is. Used by the
+   * settings UI to surface a warning instead of letting the user click Sync
+   * and get a cryptic 404. NEVER auto-deletes the mapping — the user fixes
+   * or removes it themselves.
+   */
+  mappingHealth(m: FolderMapping): { ok: true } | { ok: false; reason: string } {
+    if (!m.destinations || m.destinations.length === 0) {
+      return { ok: false, reason: "No destinations configured. Edit to add one." };
+    }
+    const incomplete = m.destinations.find(
+      (d) => !d.repoOwner || !d.repoName || !d.branch,
+    );
+    if (incomplete) {
+      return {
+        ok: false,
+        reason: `Destination missing repo or branch. Edit to fix.`,
+      };
+    }
+    // Vault folder check: empty string means "whole vault" (valid). A
+    // non-empty path must resolve to an existing folder.
+    if (m.vaultFolder && !this.app.vault.getFolderByPath(m.vaultFolder)) {
+      // Try a case-insensitive walk before giving up — disk renames can
+      // shift case without renaming the folder object.
+      const lc = m.vaultFolder.toLowerCase();
+      const match = this.app.vault
+        .getAllFolders(true)
+        .find((f) => f.path.toLowerCase() === lc);
+      if (!match) {
+        return {
+          ok: false,
+          reason: `Vault folder "${m.vaultFolder}" not found. Edit to pick a new one.`,
+        };
+      }
+    }
+    return { ok: true };
   }
 
   async saveSettings(): Promise<void> {

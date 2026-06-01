@@ -200,6 +200,17 @@ A small indicator sits in Obsidian's bottom-right status bar showing the aggrega
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
 
+## Self-healing
+
+Easy Git tries hard to keep working even when settings drift, get hand-edited, or carry state from an older version:
+
+- **Schema migration on load.** Pre-0.5.0 single-destination mappings are transparently rewritten to the multi-destination shape. Pre-0.2.0 mappings without a `rewriteWikilinks` flag default to wikilink rewrite on.
+- **Settings heal pass.** Every load runs a `healSettings()` pass that normalizes vault folder paths (strips slashes), clamps invalid numeric values back to defaults (max file size, retention days, interval minutes, debounce ms), regenerates missing destination IDs, repairs half-cleared auth state, and tops up the global exclude list with safety patterns (`.easy-git-backup/**`, `.obsidian/**`, etc.) without removing any of your additions.
+- **Corrupted data.json fallback.** If the saved settings file is unreadable, the plugin starts with defaults and shows a Notice rather than failing to load.
+- **Folder rename auto-fix.** When you rename a folder inside Obsidian, mappings pointing at it are updated automatically.
+- **Case-mismatch auto-fix.** If a mapping's saved path differs only in case from a folder that actually exists (common after a macOS/Windows case rename), the engine finds it and persists the corrected path.
+- **Broken mappings flagged, not auto-deleted.** Mappings with missing destinations, missing repo/branch, or pointing at a folder that no longer exists show an inline warning row in settings with a tooltip explaining what to fix. The Sync button is disabled until you fix or remove the mapping — you decide, the plugin never throws away your config.
+
 ## Settings layout
 
 The settings tab is grouped into foldable sections so you can collapse the parts you don't need to look at:

@@ -113,7 +113,17 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   mappings: [],
   defaultCommitTemplate:
     "Sync from Obsidian ({mapping}): {datetime} — {added}+ {modified}~ {deleted}-",
-  excludedPaths: [".obsidian/**", ".trash/**", ".git/**", "node_modules/**"],
+  excludedPaths: [
+    ".obsidian/**",
+    ".trash/**",
+    ".git/**",
+    "node_modules/**",
+    ".easy-git-backup/**",
+    ".DS_Store",
+    "Thumbs.db",
+    "*.tmp",
+    "*.swp",
+  ],
   maxFileSizeBytes: 95 * 1024 * 1024,
   showNotifications: true,
   debugLogging: false,

@@ -263,6 +263,17 @@ export class EasyGitSettingTab extends PluginSettingTab {
     if (isSyncing) statusEl.addClass("is-syncing");
     else if (anyErrored) statusEl.addClass("is-error");
 
+    // Inline broken-state warning. mappingHealth() detects missing folder,
+    // missing destinations, or destinations without a repo/branch — anything
+    // that would cause Sync to throw cryptically. The user sees the reason
+    // and a "Fix it" affordance instead of hitting Sync blind.
+    const health = this.plugin.mappingHealth(mapping);
+    if (!health.ok && !isSyncing) {
+      const warn = info.createDiv({ cls: "easy-git-mapping-warning" });
+      warn.createSpan({ cls: "easy-git-warning-icon", text: "⚠" });
+      warn.createSpan({ text: " " + health.reason });
+    }
+
     const actions = row.createDiv({ cls: "easy-git-mapping-actions" });
     actions.createSpan({
       cls: "easy-git-direction-icon",
@@ -272,7 +283,10 @@ export class EasyGitSettingTab extends PluginSettingTab {
     const syncBtn = actions.createEl("button", {
       text: isSyncing ? "Syncing…" : "Sync",
     });
-    syncBtn.disabled = isSyncing;
+    syncBtn.disabled = isSyncing || !health.ok;
+    if (!health.ok) {
+      syncBtn.setAttr("title", health.reason);
+    }
     syncBtn.onclick = async () => {
       if (this.plugin.isSyncing(mapping.id)) return;
       // Visual feedback immediately; plugin.syncMapping will fire

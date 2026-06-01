@@ -58,6 +58,19 @@
   color: var(--text-accent);
 }
 
+.easy-git-mapping-warning {
+  margin-top: 0.3rem;
+  font-size: 0.85em;
+  color: var(--text-warning, #d97706);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.2rem;
+}
+
+.easy-git-mapping-warning .easy-git-warning-icon {
+  flex-shrink: 0;
+}
+
 .easy-git-mapping-actions {
   display: flex;
   gap: 0.25rem;
