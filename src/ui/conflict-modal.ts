@@ -33,9 +33,33 @@ export class ConflictResolutionModal extends Modal {
     });
 
     const listEl = contentEl.createDiv({ cls: "easy-git-conflict-list" });
+    const rowRefreshers: Array<() => void> = [];
     for (const c of this.conflicts) {
-      this.renderConflictRow(listEl, c);
+      rowRefreshers.push(this.renderConflictRow(listEl, c));
     }
+
+    // Bulk-apply controls: useful when the user knows they want the same
+    // resolution for every conflict (e.g., single-user push-only setup
+    // that got out of sync — usually "keep local" for everything).
+    const bulkSetting = new Setting(contentEl)
+      .setName("Apply to all unset")
+      .setDesc("Set a resolution for every conflict that doesn't have one yet.");
+    bulkSetting.addButton((b) =>
+      b
+        .setButtonText("Keep local")
+        .onClick(() => {
+          this.bulkApply("keep-local");
+          rowRefreshers.forEach((fn) => fn());
+        }),
+    );
+    bulkSetting.addButton((b) =>
+      b
+        .setButtonText("Keep remote")
+        .onClick(() => {
+          this.bulkApply("keep-remote");
+          rowRefreshers.forEach((fn) => fn());
+        }),
+    );
 
     new Setting(contentEl)
       .addButton((b) =>
@@ -69,7 +93,18 @@ export class ConflictResolutionModal extends Modal {
       );
   }
 
-  private renderConflictRow(parent: HTMLElement, c: ConflictEntry): void {
+  private bulkApply(choice: ConflictResolution): void {
+    for (const c of this.conflicts) {
+      if (c.resolution) continue;
+      if (!isChoiceValid(c.kind, choice)) continue;
+      c.resolution = choice;
+    }
+  }
+
+  private renderConflictRow(
+    parent: HTMLElement,
+    c: ConflictEntry,
+  ): () => void {
     const row = parent.createDiv({ cls: "easy-git-conflict-row" });
     row.createDiv({ cls: "easy-git-conflict-path", text: c.path });
     row.createDiv({
@@ -78,6 +113,7 @@ export class ConflictResolutionModal extends Modal {
     });
     const choices = row.createDiv({ cls: "easy-git-conflict-choices" });
     const group = `conflict-${c.path}-${Math.random().toString(36).slice(2, 8)}`;
+    const radios = new Map<ConflictResolution, HTMLInputElement>();
     for (const choice of ["keep-local", "keep-remote", "keep-both"] as const) {
       if (!isChoiceValid(c.kind, choice)) continue;
       const label = choices.createEl("label", { cls: "easy-git-conflict-choice" });
@@ -89,7 +125,16 @@ export class ConflictResolutionModal extends Modal {
       radio.addEventListener("change", () => {
         c.resolution = choice;
       });
+      radios.set(choice, radio);
     }
+    // Returns a refresher that syncs the DOM radios with c.resolution after
+    // a bulk-apply mutates it. Used so "Apply keep-local to all" visibly
+    // selects the radio in every row.
+    return () => {
+      for (const [choice, radio] of radios) {
+        radio.checked = c.resolution === choice;
+      }
+    };
   }
 
   onClose(): void {

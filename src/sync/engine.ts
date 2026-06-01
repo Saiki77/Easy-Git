@@ -344,11 +344,35 @@ export class SyncEngine {
     excalidrawMissingCompanion: number;
   }> {
     const isWholeVault = isVaultRoot(mapping.vaultFolder);
-    const folder = isWholeVault
-      ? this.deps.app.vault.getRoot()
-      : this.deps.app.vault.getFolderByPath(mapping.vaultFolder);
+    let folder: TFolder | null;
+    if (isWholeVault) {
+      folder = this.deps.app.vault.getRoot();
+    } else {
+      // Normalize: strip leading/trailing slashes before lookup. Stored paths
+      // sometimes have a trailing slash that getFolderByPath doesn't accept.
+      const normalized = mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
+      folder = this.deps.app.vault.getFolderByPath(normalized);
 
-    // Safety net: if the configured folder no longer exists (renamed/moved
+      // Case-insensitive fallback: walks the vault looking for a folder whose
+      // path matches case-insensitively. Covers the case where the user
+      // renamed the folder's casing on a case-insensitive filesystem (macOS,
+      // Windows) and the metadata cache stores a different casing than the
+      // mapping. Auto-fixes the saved path on success so future syncs hit
+      // the fast path.
+      if (!folder) {
+        const targetLower = normalized.toLowerCase();
+        for (const f of this.deps.app.vault.getAllFolders()) {
+          if (f.path.toLowerCase() === targetLower) {
+            folder = f;
+            mapping.vaultFolder = f.path;
+            await this.deps.saveSettings();
+            break;
+          }
+        }
+      }
+    }
+
+    // Safety net: if the configured folder really doesn't exist (renamed/moved
     // outside Obsidian or deleted), refuse to sync. Without this we'd treat
     // every previously-synced file as locally-deleted and push the deletions.
     if (!folder) {
