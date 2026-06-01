@@ -161,6 +161,8 @@ export interface SyncResult {
   rewrittenWikilinks?: number;
   /** Number of Excalidraw embeds with no .svg/.png companion (left as a plain link). */
   excalidrawMissingCompanion?: number;
+  /** Number of conflicts auto-resolved by mtime heuristic (local-was-newer). */
+  autoResolvedConflicts?: number;
   /** Paths that were added/modified/deleted in this run (push or pull side). */
   changedPaths?: string[];
 }

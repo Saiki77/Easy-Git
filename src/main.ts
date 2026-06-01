@@ -482,6 +482,16 @@ export default class EasyGitPlugin extends Plugin {
             8000,
           );
         }
+        if (
+          result.autoResolvedConflicts &&
+          result.autoResolvedConflicts > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): ${result.autoResolvedConflicts} conflict(s) auto-resolved — local was newer than last sync.`,
+            6000,
+          );
+        }
       }
     }
   }

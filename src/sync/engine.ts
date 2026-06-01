@@ -221,17 +221,36 @@ export class SyncEngine {
     // 6. Resolve conflicts.
     let conflictPlan: ResolvedConflictPlan = { extraActions: [], keepBothRenames: [] };
     if (plan.conflicts.length > 0) {
-      const resolved = await this.deps.resolveConflicts(
-        mapping,
-        destination,
+      // 6.0 Pre-pass: auto-resolve `both-edited` conflicts where the local
+      // file's mtime is decisively newer than what we recorded at last sync.
+      // This covers the common single-user-on-multiple-devices case where
+      // lastSyncState drifted and asking the user to click N times for the
+      // same "keep local" answer is just friction.
+      const autoResolved = autoResolveByMtime(
         plan.conflicts,
+        localScan.files,
+        lastState,
       );
-      if (!resolved) {
-        baseResult.conflicts = plan.conflicts;
-        baseResult.error = "Sync cancelled at conflict resolution.";
-        return baseResult;
+      baseResult.autoResolvedConflicts =
+        (baseResult.autoResolvedConflicts ?? 0) + autoResolved;
+
+      // 6.1 If anything is still unresolved, ask the user. Otherwise skip
+      // the modal entirely.
+      const stillAmbiguous = plan.conflicts.some((c) => !c.resolution);
+      let resolvedList: ConflictEntry[] | null = plan.conflicts;
+      if (stillAmbiguous) {
+        resolvedList = await this.deps.resolveConflicts(
+          mapping,
+          destination,
+          plan.conflicts,
+        );
+        if (!resolvedList) {
+          baseResult.conflicts = plan.conflicts;
+          baseResult.error = "Sync cancelled at conflict resolution.";
+          return baseResult;
+        }
       }
-      conflictPlan = planFromResolvedConflicts(resolved, mapping.direction);
+      conflictPlan = planFromResolvedConflicts(resolvedList, mapping.direction);
     }
 
     // Apply keep-both renames in the vault first so the rename participates
@@ -743,6 +762,38 @@ export function isRewriteEnabled(mapping: FolderMapping): boolean {
 export function destinationLabel(d: MappingDestination): string {
   const remote = d.remoteFolder || "/";
   return `${d.repoOwner}/${d.repoName}:${d.branch}/${remote}`;
+}
+
+/**
+ * Auto-resolve `both-edited` conflicts where the local file's mtime is
+ * decisively newer than the mtime recorded in lastSyncState. Mutates the
+ * conflicts in place to set `resolution: "keep-local"` when the heuristic
+ * is confident. Other conflict kinds and ambiguous cases are left alone.
+ *
+ * The 2-second grace handles filesystem mtime jitter and intra-sync writes.
+ * "Local is newer" is the safe direction to auto-resolve in: it just means
+ * we're pushing the user's recent edit. "Remote is newer" requires more
+ * signal (we don't have remote-side mtime) so it stays a user decision.
+ */
+function autoResolveByMtime(
+  conflicts: ConflictEntry[],
+  localFiles: Record<string, LocalFileEntry>,
+  lastState: Record<string, FileSyncRecord>,
+): number {
+  const GRACE_MS = 2000;
+  let count = 0;
+  for (const c of conflicts) {
+    if (c.resolution) continue;
+    if (c.kind !== "both-edited") continue;
+    const local = localFiles[c.path];
+    const last = lastState[c.path];
+    if (!local?.mtime || !last?.mtime) continue;
+    if (local.mtime > last.mtime + GRACE_MS) {
+      c.resolution = "keep-local";
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /**
