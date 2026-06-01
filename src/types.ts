@@ -93,6 +93,15 @@ export interface PluginSettings {
   maxFileSizeBytes: number;
   showNotifications: boolean;
   debugLogging: boolean;
+  /** Auto-resolve `both-edited` conflicts when local mtime is decisively
+   * newer than what was recorded at last sync. Default: true. */
+  autoResolveByMtime?: boolean;
+  /** Attempt a 3-way text merge using GitHub's stored base blob for safe
+   * text files. Default: true. */
+  autoMergeText?: boolean;
+  /** Prune `.easy-git-backup/` subfolders older than this many days at the
+   * end of a successful sync. Undefined or 0 = keep all. */
+  backupRetentionDays?: number;
   /** Most-recent sync log entries, capped at SYNC_LOG_MAX. Newest first. */
   syncLog?: SyncLogEntry[];
 }
@@ -108,6 +117,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   maxFileSizeBytes: 95 * 1024 * 1024,
   showNotifications: true,
   debugLogging: false,
+  autoResolveByMtime: true,
+  autoMergeText: true,
 };
 
 export type ConflictKind =

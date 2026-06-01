@@ -153,7 +153,7 @@ One folder per sync run, files preserved with their full vault paths inside. The
 
 If a backup write itself fails (disk full, permission error, etc.), the sync aborts with a clear error rather than risk overwriting your file without a safety net. The promise: **your local content is never lost unless you've explicitly told the plugin "pull only" for this mapping.**
 
-Old backups aren't auto-pruned in this release — your `.easy-git-backup/` folder grows over time. You can safely delete subfolders by hand once you're sure you don't need them. Auto-rotation may come in a later release as an opt-in setting.
+Backups can be auto-pruned. Open **Settings → Easy Git → Backups** and set "Auto-prune backups older than (days)" to anything above 0 — the engine deletes timestamped subfolders past that window at the end of each sync. Leave it at 0 to keep every snapshot forever (the default for existing installs).
 
 ## Conflicts
 
@@ -199,6 +199,21 @@ A small indicator sits in Obsidian's bottom-right status bar showing the aggrega
 - `! Easy Git error`: at least one mapping has an unresolved error
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
+
+## Settings layout
+
+The settings tab is grouped into foldable sections so you can collapse the parts you don't need to look at:
+
+- **Authentication** — token paste, Device Flow sign-in, test connection
+- **Folder mappings** — your mappings list, add/edit/delete, sync log shortcut
+- **Conflict handling** — toggles for mtime auto-resolve and 3-way text merge
+- **Backups** — retention window and link to the backup folder
+- **Sync behaviour** — commit message template, max file size
+- **Excluded paths** — global glob list (per-mapping uses `.easygitignore`)
+- **Notifications & diagnostics** — Notice toggle, debug logging, sync log
+- **About** — version, source, license
+
+All three conflict layers (mtime auto-resolve, 3-way merge, the modal) and the backup mechanism are still on by default; the new toggles only exist for the rare case where you want to disable one.
 
 ## Permissions
 

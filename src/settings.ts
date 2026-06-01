@@ -31,11 +31,70 @@ export class EasyGitSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    containerEl.addClass("easy-git-settings");
     this.mappingRowRefs.clear();
 
-    this.renderAuthSection(containerEl);
-    this.renderMappingsSection(containerEl);
-    this.renderOptionsSection(containerEl);
+    // Foldable sections. Defaults: the two you'll touch often are open,
+    // everything else is closed so the page isn't a wall of controls.
+    this.collapsibleSection(containerEl, "Authentication", true, (body) =>
+      this.renderAuthSection(body),
+    );
+    this.collapsibleSection(containerEl, "Folder mappings", true, (body) =>
+      this.renderMappingsSection(body),
+    );
+    this.collapsibleSection(
+      containerEl,
+      "Conflict handling",
+      false,
+      (body) => this.renderConflictHandlingSection(body),
+    );
+    this.collapsibleSection(containerEl, "Backups", false, (body) =>
+      this.renderBackupsSection(body),
+    );
+    this.collapsibleSection(containerEl, "Sync behaviour", false, (body) =>
+      this.renderSyncBehaviourSection(body),
+    );
+    this.collapsibleSection(containerEl, "Excluded paths", false, (body) =>
+      this.renderExcludedPathsSection(body),
+    );
+    this.collapsibleSection(
+      containerEl,
+      "Notifications & diagnostics",
+      false,
+      (body) => this.renderDiagnosticsSection(body),
+    );
+    this.collapsibleSection(containerEl, "About", false, (body) =>
+      this.renderAboutSection(body),
+    );
+  }
+
+  /**
+   * Render one foldable section. Uses native HTML `<details>` so the
+   * disclosure widget is theme-aware and accessible without extra JS.
+   */
+  private collapsibleSection(
+    parent: HTMLElement,
+    title: string,
+    defaultOpen: boolean,
+    render: (body: HTMLElement) => void,
+  ): void {
+    const details = parent.createEl("details", {
+      cls: "easy-git-section",
+    });
+    if (defaultOpen) details.setAttr("open", "");
+    const summary = details.createEl("summary", {
+      cls: "easy-git-section-summary",
+    });
+    summary.createSpan({
+      cls: "easy-git-section-chevron",
+      text: "▸",
+    });
+    summary.createSpan({
+      cls: "easy-git-section-title",
+      text: title,
+    });
+    const body = details.createDiv({ cls: "easy-git-section-body" });
+    render(body);
   }
 
   /**
@@ -58,8 +117,6 @@ export class EasyGitSettingTab extends PluginSettingTab {
   }
 
   private renderAuthSection(parent: HTMLElement): void {
-    new Setting(parent).setName("GitHub authentication").setHeading();
-
     const status = parent.createDiv({
       attr: { style: "margin-bottom: 0.75rem; color: var(--text-muted);" },
       text: describeAuth(this.plugin.settings.auth),
@@ -157,9 +214,8 @@ export class EasyGitSettingTab extends PluginSettingTab {
   }
 
   private renderMappingsSection(parent: HTMLElement): void {
-    new Setting(parent).setName("Folder mappings").setHeading();
     parent.createEl("p", {
-      attr: { style: "margin-top:-0.5rem; color: var(--text-muted);" },
+      attr: { style: "margin-top:0; color: var(--text-muted);" },
       text: "Each mapping pairs a vault folder with a folder inside a GitHub repo.",
     });
 
@@ -269,9 +325,96 @@ export class EasyGitSettingTab extends PluginSettingTab {
     }).open();
   }
 
-  private renderOptionsSection(parent: HTMLElement): void {
-    new Setting(parent).setName("Options").setHeading();
+  private renderConflictHandlingSection(parent: HTMLElement): void {
+    parent.createEl("p", {
+      attr: { style: "margin-top:0; color: var(--text-muted);" },
+      text:
+        "Three layers stop a conflict modal from popping up when there's a safe answer: " +
+        "mtime auto-resolve catches single-user device drift, 3-way merge catches disjoint edits, " +
+        "anything left over is shown for you to decide.",
+    });
 
+    new Setting(parent)
+      .setName("Auto-resolve by local mtime")
+      .setDesc(
+        "When local was clearly edited after the last sync (2s grace), keep local without asking. Safe direction only — the reverse stays a user decision.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.autoResolveByMtime !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.autoResolveByMtime = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(parent)
+      .setName("3-way merge text files")
+      .setDesc(
+        "For Markdown and other text files where both sides edited disjoint regions, merge automatically using GitHub's stored base blob as the common ancestor.",
+      )
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.autoMergeText !== false)
+          .onChange(async (v) => {
+            this.plugin.settings.autoMergeText = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+
+  private renderBackupsSection(parent: HTMLElement): void {
+    parent.createEl("p", {
+      attr: { style: "margin-top:0; color: var(--text-muted);" },
+      text:
+        "Before any pull operation overwrites or deletes a local file, Easy Git copies the original to " +
+        ".easy-git-backup/<timestamp>/. Always on for push and bidirectional mappings; skipped only for pull-only mappings.",
+    });
+
+    new Setting(parent)
+      .setName("Auto-prune backups older than (days)")
+      .setDesc(
+        "0 keeps every snapshot forever. Pruning runs at the end of each sync that touches the mapping.",
+      )
+      .addSlider((s) =>
+        s
+          .setLimits(0, 90, 1)
+          .setValue(this.plugin.settings.backupRetentionDays ?? 0)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.backupRetentionDays = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(parent)
+      .setName("Open backup folder")
+      .setDesc("Reveal .easy-git-backup/ in the vault file explorer.")
+      .addButton((b) =>
+        b.setButtonText("Open").onClick(async () => {
+          const folder = this.app.vault.getFolderByPath(".easy-git-backup");
+          if (!folder) {
+            new Notice(
+              "Easy Git: no backups yet. Backups appear after the first pull-modify or pull-delete.",
+            );
+            return;
+          }
+          // Reveal in the file explorer via the built-in command.
+          const fileExplorer = (
+            this.app as unknown as {
+              commands?: { executeCommandById?: (id: string) => boolean };
+            }
+          ).commands?.executeCommandById?.("file-explorer:reveal-active-file");
+          // Best-effort; show a Notice with the path either way.
+          new Notice(
+            `Easy Git: backups live at "${folder.path}/" in your vault.`,
+          );
+          void fileExplorer;
+        }),
+      );
+  }
+
+  private renderSyncBehaviourSection(parent: HTMLElement): void {
     new Setting(parent)
       .setName("Default commit message template")
       .setDesc(
@@ -287,6 +430,27 @@ export class EasyGitSettingTab extends PluginSettingTab {
       );
 
     new Setting(parent)
+      .setName("Max file size (MB)")
+      .setDesc("Files larger than this are skipped (GitHub blob limit is 100 MB).")
+      .addSlider((s) =>
+        s
+          .setLimits(1, 100, 1)
+          .setValue(Math.round(this.plugin.settings.maxFileSizeBytes / (1024 * 1024)))
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.maxFileSizeBytes = v * 1024 * 1024;
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+
+  private renderExcludedPathsSection(parent: HTMLElement): void {
+    parent.createEl("p", {
+      attr: { style: "margin-top:0; color: var(--text-muted);" },
+      text:
+        "Global glob patterns applied to every mapping. For per-mapping exclusions, drop a .easygitignore file at the mapping's vault folder root.",
+    });
+    new Setting(parent)
       .setName("Excluded paths")
       .setDesc("One glob per line. Matched against vault-relative paths.")
       .addTextArea((t) => {
@@ -301,21 +465,9 @@ export class EasyGitSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
+  }
 
-    new Setting(parent)
-      .setName("Max file size (MB)")
-      .setDesc("Files larger than this are skipped (GitHub blob limit is 100 MB).")
-      .addSlider((s) =>
-        s
-          .setLimits(1, 100, 1)
-          .setValue(Math.round(this.plugin.settings.maxFileSizeBytes / (1024 * 1024)))
-          .setDynamicTooltip()
-          .onChange(async (v) => {
-            this.plugin.settings.maxFileSizeBytes = v * 1024 * 1024;
-            await this.plugin.saveSettings();
-          }),
-      );
-
+  private renderDiagnosticsSection(parent: HTMLElement): void {
     new Setting(parent)
       .setName("Show notifications")
       .setDesc("Show a Notice after each sync run.")
@@ -339,6 +491,41 @@ export class EasyGitSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }),
       );
+
+    new Setting(parent)
+      .setName("Sync log")
+      .setDesc("See recent sync runs, errors, and which files were touched.")
+      .addButton((b) =>
+        b
+          .setButtonText("Open sync log")
+          .onClick(() => this.plugin.openSyncLog()),
+      );
+  }
+
+  private renderAboutSection(parent: HTMLElement): void {
+    const version = this.plugin.manifest.version;
+    parent.createEl("p", {
+      text: `Easy Git ${version} by Saiki77`,
+      attr: { style: "margin-top:0; color: var(--text-muted);" },
+    });
+    const links = parent.createDiv({
+      attr: { style: "display: flex; gap: 1rem; flex-wrap: wrap;" },
+    });
+    const a = (href: string, text: string) => {
+      const el = links.createEl("a", { text, href });
+      el.setAttr("target", "_blank");
+      el.setAttr("rel", "noopener");
+    };
+    a("https://github.com/Saiki77/Easy-Git", "Source");
+    a("https://github.com/Saiki77/Easy-Git/issues", "Report an issue");
+    a(
+      "https://github.com/Saiki77/Easy-Git/blob/main/README.md",
+      "Documentation",
+    );
+    a(
+      "https://github.com/Saiki77/Easy-Git/blob/main/LICENSE",
+      "License (MIT)",
+    );
   }
 }
 

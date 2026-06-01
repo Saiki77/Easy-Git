@@ -322,3 +322,64 @@
   color: var(--text-faint);
   font-style: italic;
 }
+
+/* Foldable settings sections (<details> / <summary>). */
+.easy-git-settings .easy-git-section {
+  margin: 0.6rem 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background-color: var(--background-secondary);
+  overflow: hidden;
+}
+
+.easy-git-settings .easy-git-section > .easy-git-section-summary {
+  padding: 0.6rem 0.85rem;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--text-normal);
+  user-select: none;
+}
+
+.easy-git-settings .easy-git-section > .easy-git-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.easy-git-settings .easy-git-section[open] > .easy-git-section-summary {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.easy-git-settings .easy-git-section .easy-git-section-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.easy-git-settings .easy-git-section[open] .easy-git-section-chevron {
+  transform: rotate(90deg);
+}
+
+.easy-git-settings .easy-git-section .easy-git-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.easy-git-settings .easy-git-section .easy-git-section-body {
+  padding: 0.6rem 0.85rem 0.4rem;
+  background-color: var(--background-primary);
+}
+
+/* Tighten the gap between sections' .setting-item rows since they're now
+ * inside a card; the default top-border looks heavy here. */
+.easy-git-settings .easy-git-section-body > .setting-item {
+  border-top: 1px solid var(--background-modifier-border);
+  padding: 0.55rem 0;
+}
+
+.easy-git-settings .easy-git-section-body > .setting-item:first-child {
+  border-top: none;
+}

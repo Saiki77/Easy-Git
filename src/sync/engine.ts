@@ -74,6 +74,13 @@ export class SyncEngine {
     for (const destination of mapping.destinations) {
       results.push(await this.syncDestination(mapping, destination));
     }
+    // Prune old backup snapshots once per mapping-sync. Only runs if the
+    // user has set a retention window in settings; failures are silent.
+    try {
+      await this.pruneBackups();
+    } catch {
+      /* never let pruning failures break a successful sync */
+    }
     return results;
   }
 
@@ -229,13 +236,16 @@ export class SyncEngine {
     if (plan.conflicts.length > 0) {
       // 6.0 Pre-pass: auto-resolve `both-edited` conflicts where the local
       // file's mtime is decisively newer than what we recorded at last sync.
-      const autoResolved = autoResolveByMtime(
-        plan.conflicts,
-        localScan.files,
-        lastState,
-      );
-      baseResult.autoResolvedConflicts =
-        (baseResult.autoResolvedConflicts ?? 0) + autoResolved;
+      // Gated on settings.autoResolveByMtime (default on).
+      if (this.deps.settings.autoResolveByMtime !== false) {
+        const autoResolved = autoResolveByMtime(
+          plan.conflicts,
+          localScan.files,
+          lastState,
+        );
+        baseResult.autoResolvedConflicts =
+          (baseResult.autoResolvedConflicts ?? 0) + autoResolved;
+      }
 
       // 6.05 Pre-pass: 3-way text merge for `both-edited` conflicts where
       // both sides edited disjoint regions of the same file. Uses GitHub's
@@ -243,18 +253,21 @@ export class SyncEngine {
       // ancestor — that's the same blob both sides forked from. Files
       // are pre-merged in the vault (with a backup) so the push side
       // emits the merged content via the normal keep-local path.
-      const mergedCount = await this.tryThreeWayMerges(
-        client,
-        destination,
-        mapping,
-        plan.conflicts,
-        localScan.files,
-        lastState,
-        backupTimestamp,
-      );
-      if (mergedCount > 0) {
-        baseResult.mergedConflicts =
-          (baseResult.mergedConflicts ?? 0) + mergedCount;
+      // Gated on settings.autoMergeText (default on).
+      if (this.deps.settings.autoMergeText !== false) {
+        const mergedCount = await this.tryThreeWayMerges(
+          client,
+          destination,
+          mapping,
+          plan.conflicts,
+          localScan.files,
+          lastState,
+          backupTimestamp,
+        );
+        if (mergedCount > 0) {
+          baseResult.mergedConflicts =
+            (baseResult.mergedConflicts ?? 0) + mergedCount;
+        }
       }
 
       // 6.1 If anything is still unresolved, ask the user. Otherwise skip
@@ -673,6 +686,49 @@ export class SyncEngine {
         }). Sync aborted to prevent data loss.`,
       );
     }
+  }
+
+  /**
+   * Prune `.easy-git-backup/<timestamp>/` subfolders older than
+   * `settings.backupRetentionDays`. No-op when unset, 0, or negative.
+   *
+   * Timestamps live in the folder name (`YYYY-MM-DD-HHmmss`) so we don't
+   * need to read mtimes — we just parse the name. Unparseable names are
+   * left alone (forward-compatible if we ever change the format).
+   */
+  private async pruneBackups(): Promise<number> {
+    const days = this.deps.settings.backupRetentionDays;
+    if (!days || days <= 0) return 0;
+    const root = this.deps.app.vault.getFolderByPath(".easy-git-backup");
+    if (!root) return 0;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    let pruned = 0;
+    // Snapshot children first — deleting mutates root.children mid-iteration.
+    const children = [...root.children];
+    for (const child of children) {
+      if (!(child instanceof TFolder)) continue;
+      const m = child.name.match(
+        /^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})$/,
+      );
+      if (!m) continue;
+      const ts = new Date(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3]),
+        Number(m[4]),
+        Number(m[5]),
+        Number(m[6]),
+      ).getTime();
+      if (Number.isNaN(ts) || ts >= cutoff) continue;
+      try {
+        // Recursive delete via the adapter.
+        await this.deps.app.vault.adapter.rmdir(child.path, true);
+        pruned += 1;
+      } catch {
+        /* leave the folder; we'll try again next sync */
+      }
+    }
+    return pruned;
   }
 
   /**
