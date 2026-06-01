@@ -266,13 +266,31 @@ export class SyncEngine {
 
     const actions = [...plan.actions, ...conflictPlan.extraActions];
 
-    // 7. Apply pull-side actions.
+    // 7. Apply pull-side actions. Before any operation that destroys local
+    // content (pull-modify of an existing file, pull-delete), back the file
+    // up to .easy-git-backup/<timestamp>/<original-path>. Skipped when the
+    // mapping direction is "pull" (user opted into remote-wins).
+    const backupTimestamp = formatBackupTimestamp(new Date());
+    let backupsCreated = 0;
     for (const action of actions) {
-      if (action.op === "pull-add" || action.op === "pull-modify") {
+      if (action.op === "pull-modify") {
+        const fullPath = vaultPathFor(mapping, action.path);
+        const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
+        if (backed) backupsCreated += 1;
+        await this.applyPullModify(mapping, destination, action, client);
+      } else if (action.op === "pull-add") {
         await this.applyPullModify(mapping, destination, action, client);
       } else if (action.op === "pull-delete") {
+        const fullPath = vaultPathFor(mapping, action.path);
+        const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
+        if (backed) backupsCreated += 1;
         await this.applyPullDelete(mapping, action);
       }
+    }
+    if (backupsCreated > 0) {
+      baseResult.backupsCreated =
+        (baseResult.backupsCreated ?? 0) + backupsCreated;
+      baseResult.backupFolder = `.easy-git-backup/${backupTimestamp}/`;
     }
 
     // 8. Build remote commit if push actions exist.
@@ -405,6 +423,7 @@ export class SyncEngine {
     const localIgnore = await this.loadLocalIgnore(mapping);
     const excludePatterns = [
       ".easygitignore",
+      ".easy-git-backup/**",
       ...this.deps.settings.excludedPaths,
       ...localIgnore,
     ];
@@ -499,6 +518,47 @@ export class SyncEngine {
       rewrittenWikilinks,
       excalidrawMissingCompanion,
     };
+  }
+
+  /**
+   * Snapshot the current local content of a vault file to
+   * `.easy-git-backup/<timestamp>/<vaultPath>` before an operation that
+   * would overwrite or delete it.
+   *
+   * Returns true on success, false if no backup was needed (no existing
+   * local file, or mapping is pull-only). Throws on write failure — the
+   * caller aborts the whole sync rather than risk losing the original.
+   */
+  private async backupVaultFile(
+    mapping: FolderMapping,
+    vaultPath: string,
+    timestamp: string,
+  ): Promise<boolean> {
+    if (mapping.direction === "pull") return false;
+    const file = this.deps.app.vault.getFileByPath(vaultPath);
+    if (!file) return false;
+
+    const backupPath = `.easy-git-backup/${timestamp}/${vaultPath}`;
+    await ensureVaultFolder(this.deps.app, parentOf(backupPath));
+
+    try {
+      if (isLikelyTextPath(file.path)) {
+        const text = await this.deps.app.vault.read(file);
+        await this.deps.app.vault.create(backupPath, text);
+      } else {
+        const buf = await this.deps.app.vault.readBinary(file);
+        await this.deps.app.vault.createBinary(backupPath, buf);
+      }
+      return true;
+    } catch (e) {
+      // Adapter sometimes errors on duplicate paths within the same second.
+      // Treat any failure as fatal — we promised local would not be lost.
+      throw new Error(
+        `Easy Git: could not back up "${vaultPath}" before overwrite (${
+          e instanceof Error ? e.message : String(e)
+        }). Sync aborted to prevent data loss.`,
+      );
+    }
   }
 
   /**
@@ -762,6 +822,18 @@ export function isRewriteEnabled(mapping: FolderMapping): boolean {
 export function destinationLabel(d: MappingDestination): string {
   const remote = d.remoteFolder || "/";
   return `${d.repoOwner}/${d.repoName}:${d.branch}/${remote}`;
+}
+
+/**
+ * Format a Date as `YYYY-MM-DD-HHmm` for use in the backup folder name.
+ * Stable, sortable, filesystem-safe, and gives one folder per sync run.
+ */
+function formatBackupTimestamp(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-` +
+    `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  );
 }
 
 /**

@@ -492,6 +492,16 @@ export default class EasyGitPlugin extends Plugin {
             6000,
           );
         }
+        if (
+          result.backupsCreated &&
+          result.backupsCreated > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): backed up ${result.backupsCreated} local file(s) to ${result.backupFolder ?? ".easy-git-backup/"} before overwrite.`,
+            8000,
+          );
+        }
       }
     }
   }

@@ -163,6 +163,15 @@ export interface SyncResult {
   excalidrawMissingCompanion?: number;
   /** Number of conflicts auto-resolved by mtime heuristic (local-was-newer). */
   autoResolvedConflicts?: number;
+  /** Number of local files backed up to `.easy-git-backup/` before being
+   * overwritten or deleted by the pull side of this run. */
+  backupsCreated?: number;
+  /** Vault-relative path of the backup folder for this run, if any backups
+   * were created. */
+  backupFolder?: string;
+  /** Number of `both-edited` conflicts auto-resolved by 3-way merge using
+   * GitHub's stored base blob. */
+  mergedConflicts?: number;
   /** Paths that were added/modified/deleted in this run (push or pull side). */
   changedPaths?: string[];
 }

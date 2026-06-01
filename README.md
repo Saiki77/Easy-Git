@@ -129,6 +129,22 @@ To enable this, turn on **Auto-export SVG** (or PNG) in the Excalidraw plugin's 
 
 If no companion exists, Easy Git falls back to a plain link and surfaces a one-time Notice telling you how to enable auto-export.
 
+## Backups
+
+Easy Git never overwrites a local file without first writing a snapshot of the pre-existing content to a backup folder, unless the mapping is set to **pull only** (in which case you've explicitly opted into remote-wins behavior).
+
+Before any `pull-modify` or `pull-delete` operation, the engine snapshots the current local file to:
+
+```
+<vault>/.easy-git-backup/<YYYY-MM-DD-HHmmss>/<original-vault-path>
+```
+
+One folder per sync run, files preserved with their full vault paths inside. The folder is hardcoded to be excluded from any sync, so backups never travel to your remote — they're local-only.
+
+If a backup write itself fails (disk full, permission error, etc.), the sync aborts with a clear error rather than risk overwriting your file without a safety net. The promise: **your local content is never lost unless you've explicitly told the plugin "pull only" for this mapping.**
+
+Old backups aren't auto-pruned in this release — your `.easy-git-backup/` folder grows over time. You can safely delete subfolders by hand once you're sure you don't need them. Auto-rotation may come in a later release as an opt-in setting.
+
 ## Conflicts
 
 If the same file changed on both sides since the last sync, Easy Git pauses and lets you pick **keep local**, **keep remote**, or **keep both** (renames your local copy with a `-conflict-local-<timestamp>` suffix so neither side is lost). Cancelling the conflict modal aborts the entire run without touching anything.
