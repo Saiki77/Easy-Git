@@ -129,6 +129,16 @@ To enable this, turn on **Auto-export SVG** (or PNG) in the Excalidraw plugin's 
 
 If no companion exists, Easy Git falls back to a plain link and surfaces a one-time Notice telling you how to enable auto-export.
 
+## Conflict handling
+
+When both sides of a sync changed a file since the last sync, Easy Git resolves it through a layered approach. Each step handles a different category; what survives lands in the conflict modal.
+
+1. **mtime auto-resolve.** If your local file's mtime is decisively newer than what we recorded at last sync, the engine takes that as "you edited this locally" and resolves to **keep local**. Covers the common single-user-on-multiple-devices case.
+2. **3-way text merge.** For text files where both sides edited *disjoint* regions, the engine fetches the common ancestor blob from GitHub (using `lastSyncState.files[path].sha` — the SHA both sides forked from), runs a 3-way diff, and if the merge is clean, writes the merged content locally. The pre-merge content is backed up first (see below). Skipped for binary files and for `.md` files in mappings with wikilink rewrite on (where merging rewritten markdown back to the vault would destroy your wikilink notation).
+3. **Conflict modal.** Anything still ambiguous opens the modal with **keep local / keep remote / keep both** per file, plus bulk **Apply to all unset** buttons.
+
+In all three paths, local files are protected by the backup mechanism below.
+
 ## Backups
 
 Easy Git never overwrites a local file without first writing a snapshot of the pre-existing content to a backup folder, unless the mapping is set to **pull only** (in which case you've explicitly opted into remote-wins behavior).

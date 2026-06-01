@@ -493,6 +493,16 @@ export default class EasyGitPlugin extends Plugin {
           );
         }
         if (
+          result.mergedConflicts &&
+          result.mergedConflicts > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): ${result.mergedConflicts} conflict(s) merged automatically via 3-way diff.`,
+            6000,
+          );
+        }
+        if (
           result.backupsCreated &&
           result.backupsCreated > 0 &&
           this.settings.showNotifications

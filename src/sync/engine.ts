@@ -43,6 +43,7 @@ import {
   WikilinkResolver,
   rewriteWikilinks,
 } from "./wikilink-rewrite";
+import { merge as diff3Merge } from "node-diff3";
 
 export interface SyncEngineDeps {
   app: App;
@@ -218,14 +219,16 @@ export class SyncEngine {
       direction: mapping.direction,
     });
 
+    // The same backup folder timestamp is used by both the 3-way merge
+    // pre-pass and the pull-side application step below, so all files
+    // affected by a single sync run cluster in one folder.
+    const backupTimestamp = formatBackupTimestamp(new Date());
+
     // 6. Resolve conflicts.
     let conflictPlan: ResolvedConflictPlan = { extraActions: [], keepBothRenames: [] };
     if (plan.conflicts.length > 0) {
       // 6.0 Pre-pass: auto-resolve `both-edited` conflicts where the local
       // file's mtime is decisively newer than what we recorded at last sync.
-      // This covers the common single-user-on-multiple-devices case where
-      // lastSyncState drifted and asking the user to click N times for the
-      // same "keep local" answer is just friction.
       const autoResolved = autoResolveByMtime(
         plan.conflicts,
         localScan.files,
@@ -233,6 +236,26 @@ export class SyncEngine {
       );
       baseResult.autoResolvedConflicts =
         (baseResult.autoResolvedConflicts ?? 0) + autoResolved;
+
+      // 6.05 Pre-pass: 3-way text merge for `both-edited` conflicts where
+      // both sides edited disjoint regions of the same file. Uses GitHub's
+      // stored blob at `lastSyncState.files[path].sha` as the common
+      // ancestor — that's the same blob both sides forked from. Files
+      // are pre-merged in the vault (with a backup) so the push side
+      // emits the merged content via the normal keep-local path.
+      const mergedCount = await this.tryThreeWayMerges(
+        client,
+        destination,
+        mapping,
+        plan.conflicts,
+        localScan.files,
+        lastState,
+        backupTimestamp,
+      );
+      if (mergedCount > 0) {
+        baseResult.mergedConflicts =
+          (baseResult.mergedConflicts ?? 0) + mergedCount;
+      }
 
       // 6.1 If anything is still unresolved, ask the user. Otherwise skip
       // the modal entirely.
@@ -270,7 +293,7 @@ export class SyncEngine {
     // content (pull-modify of an existing file, pull-delete), back the file
     // up to .easy-git-backup/<timestamp>/<original-path>. Skipped when the
     // mapping direction is "pull" (user opted into remote-wins).
-    const backupTimestamp = formatBackupTimestamp(new Date());
+    // backupTimestamp was computed above so step 6.05 can use it too.
     let backupsCreated = 0;
     for (const action of actions) {
       if (action.op === "pull-modify") {
@@ -518,6 +541,97 @@ export class SyncEngine {
       rewrittenWikilinks,
       excalidrawMissingCompanion,
     };
+  }
+
+  /**
+   * For each `both-edited` conflict that's safe to merge, fetch the common
+   * ancestor blob from GitHub (the SHA we recorded at lastSync — that's what
+   * both sides forked from), run a 3-way text merge, and if it's clean,
+   * write the merged content to the vault (with a pre-merge backup) so the
+   * push side sends the merged file via the normal keep-local path.
+   *
+   * Skipped for:
+   *   - non-text files (binary by extension)
+   *   - `.md` files in mappings with wikilink rewrite on — the local SHA on
+   *     record is of the rewritten markdown, not the wikilink-form vault
+   *     content, so writing rewritten merged content back to the vault
+   *     would destroy the user's wikilink notation
+   *
+   * Returns the number of conflicts cleanly merged.
+   */
+  private async tryThreeWayMerges(
+    client: GitHubClient,
+    destination: MappingDestination,
+    mapping: FolderMapping,
+    conflicts: ConflictEntry[],
+    localFiles: Record<string, LocalFileEntry>,
+    lastState: Record<string, FileSyncRecord>,
+    backupTimestamp: string,
+  ): Promise<number> {
+    let merged = 0;
+    const rewriteOn = isRewriteEnabled(mapping) && mapping.direction !== "pull";
+
+    for (const c of conflicts) {
+      if (c.resolution) continue;
+      if (c.kind !== "both-edited") continue;
+      if (!c.localSha || !c.remoteSha) continue;
+      const baseFileSha = lastState[c.path]?.sha;
+      if (!baseFileSha) continue;
+
+      // Gate: text only.
+      if (!isLikelyTextPath(c.path)) continue;
+
+      // Gate: skip rewritten .md files (writing merged rewritten content
+      // back to the vault would convert wikilinks to markdown).
+      const isMd = c.path.toLowerCase().endsWith(".md");
+      if (isMd && rewriteOn) continue;
+
+      try {
+        // Fetch base + remote blob contents from GitHub. Local content comes
+        // from the vault directly.
+        const [baseBlob, remoteBlob] = await Promise.all([
+          getBlobContent(client, destination.repoOwner, destination.repoName, baseFileSha),
+          getBlobContent(client, destination.repoOwner, destination.repoName, c.remoteSha),
+        ]);
+        const baseText = base64ToString(baseBlob.content);
+        const remoteText = base64ToString(remoteBlob.content);
+
+        const vaultPath = vaultPathFor(mapping, c.path);
+        const file = this.deps.app.vault.getFileByPath(vaultPath);
+        if (!file) continue;
+        const localText = await this.deps.app.vault.read(file);
+
+        // Run diff3. node-diff3.merge(a, base, b) → { conflict, result: lines }.
+        const result = diff3Merge(
+          localText.split("\n"),
+          baseText.split("\n"),
+          remoteText.split("\n"),
+        );
+        if (result.conflict) continue;
+
+        // Backup the existing local content before overwrite.
+        await this.backupVaultFile(mapping, vaultPath, backupTimestamp);
+
+        const mergedText = result.result.join("\n");
+        await this.deps.app.vault.modify(file, mergedText);
+
+        // Update the in-memory local scan so push-modify reads the new SHA.
+        const newSha = await computeGitBlobShaFromString(mergedText);
+        localFiles[c.path] = {
+          path: c.path,
+          sha: newSha,
+          size: new TextEncoder().encode(mergedText).byteLength,
+          mtime: Date.now(),
+        };
+
+        c.resolution = "keep-local";
+        merged += 1;
+      } catch {
+        // Any failure (network, decode, write) → leave for the modal.
+        continue;
+      }
+    }
+    return merged;
   }
 
   /**
