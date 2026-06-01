@@ -192,6 +192,9 @@ export class SyncEngine {
     if (localScan.unresolvedWikilinks > 0) {
       baseResult.unresolvedWikilinks = localScan.unresolvedWikilinks;
     }
+    if (localScan.excalidrawMissingCompanion > 0) {
+      baseResult.excalidrawMissingCompanion = localScan.excalidrawMissingCompanion;
+    }
 
     // 4. Load last-sync state for THIS destination.
     const lastState: Record<string, FileSyncRecord> =
@@ -338,6 +341,7 @@ export class SyncEngine {
     skipped: string[];
     unresolvedWikilinks: number;
     rewrittenWikilinks: number;
+    excalidrawMissingCompanion: number;
   }> {
     const isWholeVault = isVaultRoot(mapping.vaultFolder);
     const folder = isWholeVault
@@ -369,6 +373,7 @@ export class SyncEngine {
     const rewriteOn = isRewriteEnabled(mapping) && mapping.direction !== "pull";
     let unresolvedWikilinks = 0;
     let rewrittenWikilinks = 0;
+    let excalidrawMissingCompanion = 0;
     const accumulatedExtraBlobs: ExtraBlob[] = [];
 
     const stack: TFolder[] = [folder];
@@ -397,6 +402,7 @@ export class SyncEngine {
             const finalText = result.markdown;
             unresolvedWikilinks += result.unresolvedCount;
             rewrittenWikilinks += result.rewrittenCount;
+            excalidrawMissingCompanion += result.excalidrawMissingCompanion;
             for (const blob of result.extraBlobs) {
               accumulatedExtraBlobs.push(blob);
             }
@@ -448,6 +454,7 @@ export class SyncEngine {
       skipped,
       unresolvedWikilinks,
       rewrittenWikilinks,
+      excalidrawMissingCompanion,
     };
   }
 

@@ -112,7 +112,7 @@ Obsidian uses wikilink embeds like `![[Pasted image …png]]`. GitHub's Markdown
 | --- | --- |
 | `![[image.png]]` | `![](image.png)` |
 | `![[image.png\|Caption]]` | `![Caption](image.png)` |
-| `![[image.png\|400]]` | `![](image.png)` (width hint dropped) |
+| `![[image.png\|400]]` | `<img src="image.png" width="400" alt="">` (width hint preserved as inline HTML) |
 | `![[note#header]]` | unchanged (GitHub can't transclude) |
 
 If a wikilink points to an attachment outside the mapping's vault folder, the file is copied to `attachments/<basename>` inside the mapping's remote folder and the rewritten link points there. That keeps each remote folder self-contained, you can browse it on GitHub without broken references.
@@ -120,6 +120,14 @@ If a wikilink points to an attachment outside the mapping's vault folder, the fi
 Your vault is never modified. The rewrite only affects the bytes pushed to GitHub. Pulling those notes back into Obsidian renders fine because both wikilink and standard-Markdown forms work in Obsidian.
 
 Toggle off per mapping if you want the raw wikilinks pushed verbatim (the mapping summary will show `(raw wikilinks)`).
+
+### Excalidraw drawings
+
+Excalidraw drawings embedded as `![[Drawing.excalidraw|700]]` (or `.excalidraw.md` for the newer format) won't render on GitHub by themselves, since GitHub doesn't understand the source files. Easy Git auto-resolves them to their **companion image**: when the rewriter sees an Excalidraw embed, it looks for a sibling `<name>.svg` or `<name>.png` in the same folder and rewrites the embed to point there. Width hints (`|700`) are preserved as inline HTML so drawings keep their intended size.
+
+To enable this, turn on **Auto-export SVG** (or PNG) in the Excalidraw plugin's settings. Excalidraw will then write a companion `.svg` next to every drawing each time you edit it, and Easy Git will pick it up automatically.
+
+If no companion exists, Easy Git falls back to a plain link and surfaces a one-time Notice telling you how to enable auto-export.
 
 ## Conflicts
 

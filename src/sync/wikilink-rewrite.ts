@@ -46,6 +46,10 @@ export interface RewriteResult {
   unresolvedCount: number;
   /** Count of wikilinks that were actually rewritten. */
   rewrittenCount: number;
+  /** Count of Excalidraw embeds successfully resolved to a companion image. */
+  excalidrawResolved: number;
+  /** Count of Excalidraw embeds with no .svg/.png companion (still rewritten as a plain link). */
+  excalidrawMissingCompanion: number;
 }
 
 export function rewriteWikilinks(
@@ -57,6 +61,8 @@ export function rewriteWikilinks(
   const seenRemotePaths = new Set<string>();
   let unresolvedCount = 0;
   let rewrittenCount = 0;
+  let excalidrawResolved = 0;
+  let excalidrawMissingCompanion = 0;
 
   const regions = splitByCodeRegions(markdown);
   for (const region of regions) {
@@ -77,6 +83,12 @@ export function rewriteWikilinks(
         onRewritten: () => {
           rewrittenCount += 1;
         },
+        onExcalidrawResolved: () => {
+          excalidrawResolved += 1;
+        },
+        onExcalidrawMissingCompanion: () => {
+          excalidrawMissingCompanion += 1;
+        },
       }),
     );
   }
@@ -86,6 +98,8 @@ export function rewriteWikilinks(
     extraBlobs,
     unresolvedCount,
     rewrittenCount,
+    excalidrawResolved,
+    excalidrawMissingCompanion,
   };
 }
 
@@ -93,6 +107,8 @@ interface RewriteCallbacks {
   addBlob: (b: ExtraBlob) => void;
   onUnresolved: () => void;
   onRewritten: () => void;
+  onExcalidrawResolved: () => void;
+  onExcalidrawMissingCompanion: () => void;
 }
 
 // Matches Obsidian embeds: ![[anything but ] or newline]]
@@ -124,28 +140,43 @@ function rewriteInProse(
       return match;
     }
 
+    // Excalidraw integration: if the resolved target is an Excalidraw source
+    // file, look for a sibling .svg or .png companion (which the Excalidraw
+    // plugin auto-exports when "Auto-export SVG/PNG" is enabled) and rewrite
+    // to point at that. GitHub can't render the raw .excalidraw JSON.
+    let effectiveTarget = resolved;
+    if (isExcalidrawPath(resolved.path)) {
+      let companion: ResolvedTarget | null = null;
+      for (const candidate of excalidrawCompanionCandidates(resolved.path)) {
+        companion = ctx.resolve(candidate, ctx.sourcePath);
+        if (companion) break;
+      }
+      if (companion) {
+        effectiveTarget = companion;
+        cb.onExcalidrawResolved();
+      } else {
+        cb.onExcalidrawMissingCompanion();
+        // fall through with the original .excalidraw target → emits a link
+      }
+    }
+
     const aliasTrim = rawAlias.trim();
     const isWidthHint = aliasTrim.length > 0 && /^\d+$/.test(aliasTrim);
     const altText = aliasTrim && !isWidthHint ? aliasTrim : "";
 
-    const resolvedPath = resolved.path;
-    const ext = extensionOf(resolvedPath).toLowerCase();
+    const effectivePath = effectiveTarget.path;
+    const ext = extensionOf(effectivePath).toLowerCase();
     const isImage = IMAGE_EXTS.has(ext);
 
     let urlPath: string;
-    const insideMapping = isUnder(resolvedPath, ctx.mappingVaultFolder);
+    const insideMapping = isUnder(effectivePath, ctx.mappingVaultFolder);
     if (insideMapping) {
-      urlPath = relativeFromTo(ctx.sourcePath, resolvedPath);
+      urlPath = relativeFromTo(ctx.sourcePath, effectivePath);
     } else {
       // Co-locate the attachment under the mapping's remote folder.
-      const basename = pathBasename(resolvedPath);
+      const basename = pathBasename(effectivePath);
       const remoteRelPath = `attachments/${basename}`;
-      cb.addBlob({ vaultPath: resolvedPath, remoteRelPath });
-      // URL is relative from the markdown file to attachments/<basename>.
-      // Markdown file lives inside the mapping vault folder; on the remote it
-      // sits at <remoteFolder>/<relativeToMapping>. The attachment lives at
-      // <remoteFolder>/attachments/<basename>. So the relative URL is the
-      // relative path from the md's relative dir to "attachments/<basename>".
+      cb.addBlob({ vaultPath: effectivePath, remoteRelPath });
       urlPath = relativeFromMdToAttachment(
         ctx.sourcePath,
         ctx.mappingVaultFolder,
@@ -156,13 +187,43 @@ function rewriteInProse(
     const encodedUrl = encodeMarkdownUrl(urlPath);
 
     cb.onRewritten();
+    if (isImage && isWidthHint) {
+      // Width hint + image: use HTML img to preserve the width (CommonMark
+      // has no width syntax; GitHub renders inline HTML <img> reliably).
+      return `<img src="${encodedUrl}" width="${aliasTrim}" alt="">`;
+    }
     if (isImage) {
       return `![${altText}](${encodedUrl})`;
     }
     // Non-image embeds → plain link.
-    const linkText = altText || pathBasename(resolvedPath);
+    const linkText = altText || pathBasename(effectivePath);
     return `[${linkText}](${encodedUrl})`;
   });
+}
+
+// ---------- Excalidraw helpers ----------
+
+function isExcalidrawPath(p: string): boolean {
+  const base = pathBasename(p).toLowerCase();
+  return base.endsWith(".excalidraw") || base.endsWith(".excalidraw.md");
+}
+
+/**
+ * Candidate companion paths for an Excalidraw source file. Returns the list in
+ * priority order: SVG before PNG (vector scales better), short form before the
+ * `.excalidraw.svg` form (matches the Excalidraw plugin's default output).
+ */
+function excalidrawCompanionCandidates(p: string): string[] {
+  const dir = parentDir(p);
+  const base = pathBasename(p);
+  const stem = base.replace(/\.excalidraw(\.md)?$/i, "");
+  const prefix = dir ? `${dir}/` : "";
+  return [
+    `${prefix}${stem}.svg`,
+    `${prefix}${stem}.png`,
+    `${prefix}${stem}.excalidraw.svg`,
+    `${prefix}${stem}.excalidraw.png`,
+  ];
 }
 
 // ---------- code-region tokenizer ----------

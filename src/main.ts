@@ -472,6 +472,16 @@ export default class EasyGitPlugin extends Plugin {
             `Easy Git (${mapping.name}${label}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
           );
         }
+        if (
+          result.excalidrawMissingCompanion &&
+          result.excalidrawMissingCompanion > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): ${result.excalidrawMissingCompanion} Excalidraw drawing(s) have no .svg/.png companion. Enable "Auto-export SVG" in the Excalidraw plugin to render them on GitHub.`,
+            8000,
+          );
+        }
       }
     }
   }

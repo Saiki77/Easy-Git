@@ -159,6 +159,8 @@ export interface SyncResult {
   unresolvedWikilinks?: number;
   /** Number of wikilinks actually rewritten across this run. */
   rewrittenWikilinks?: number;
+  /** Number of Excalidraw embeds with no .svg/.png companion (left as a plain link). */
+  excalidrawMissingCompanion?: number;
   /** Paths that were added/modified/deleted in this run (push or pull side). */
   changedPaths?: string[];
 }
