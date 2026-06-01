@@ -10,7 +10,12 @@ import {
   SyncDirection,
   makeId,
 } from "../types";
-import { BranchSuggest, RepoSuggest, VaultFolderSuggest } from "./pickers";
+import {
+  BranchSuggest,
+  RemoteFolderSuggest,
+  RepoSuggest,
+  VaultFolderSuggest,
+} from "./pickers";
 
 export interface MappingModalOptions {
   initial?: FolderMapping;
@@ -300,6 +305,34 @@ export class EditMappingModal extends Modal {
     pathInput.value = dest.remoteFolder;
     pathInput.oninput = () => {
       dest.remoteFolder = pathInput.value.trim();
+    };
+    // Folder picker: lists every folder already in the chosen repo+branch
+    // so the user doesn't have to copy paths off GitHub. The input stays
+    // editable for sub-paths that don't yet exist.
+    const browseBtn = pathRow.createEl("button", { text: "Choose…" });
+    browseBtn.addClass("easy-git-picker-inline");
+    browseBtn.onclick = () => {
+      if (!this.client) {
+        new Notice("Please configure GitHub authentication first.");
+        return;
+      }
+      if (!dest.repoOwner || !dest.repoName) {
+        new Notice("Please choose a repository first.");
+        return;
+      }
+      const modal = new RemoteFolderSuggest(
+        this.app,
+        this.client,
+        dest.repoOwner,
+        dest.repoName,
+        dest.branch, // may be "" — picker resolves repo default if so
+        (path) => {
+          dest.remoteFolder = path;
+          pathInput.value = path;
+        },
+      );
+      modal.open();
+      void modal.load();
     };
 
     const actionsRow = card.createDiv({ cls: "easy-git-destination-actions" });

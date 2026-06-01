@@ -63,9 +63,33 @@ export class EasyGitSettingTab extends PluginSettingTab {
       false,
       (body) => this.renderDiagnosticsSection(body),
     );
-    this.collapsibleSection(containerEl, "About", false, (body) =>
+    // About is always visible at the bottom — it's reference info, not
+    // a setting. No chevron, no fold. Same card styling as the rest so
+    // the page reads as one consistent stack.
+    this.flatSection(containerEl, "About", (body) =>
       this.renderAboutSection(body),
     );
+  }
+
+  /**
+   * Render a non-foldable card with the same outer styling as the
+   * collapsible sections so About sits visually with the rest.
+   */
+  private flatSection(
+    parent: HTMLElement,
+    title: string,
+    render: (body: HTMLElement) => void,
+  ): void {
+    const card = parent.createDiv({
+      cls: "easy-git-section easy-git-section-flat",
+    });
+    const header = card.createDiv({ cls: "easy-git-section-summary" });
+    header.createSpan({
+      cls: "easy-git-section-title",
+      text: title,
+    });
+    const body = card.createDiv({ cls: "easy-git-section-body" });
+    render(body);
   }
 
   /**

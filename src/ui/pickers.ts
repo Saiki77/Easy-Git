@@ -1,6 +1,12 @@
 import { App, FuzzySuggestModal, Notice, TFolder } from "obsidian";
 import { GitHubClient } from "../github/client";
-import { listBranches, listUserRepos } from "../github/git-data";
+import {
+  getBranchHead,
+  getRepo,
+  getTreeRecursive,
+  listBranches,
+  listUserRepos,
+} from "../github/git-data";
 import { BranchSummary, RepoSummary } from "../types";
 import { describeAuthError } from "../github/auth";
 
@@ -117,6 +123,81 @@ export class BranchSuggest extends FuzzySuggestModal<BranchSummary> {
 
   onChooseItem(b: BranchSummary): void {
     this.onChoose(b);
+  }
+}
+
+/**
+ * Browse and pick a folder that already exists inside the chosen
+ * repo+branch. Saves the user from copying paths off GitHub by hand.
+ *
+ * Lists every folder under the branch via a single recursive tree call.
+ * The user can still type a path manually in the input — the picker is
+ * a shortcut, not a constraint (we offer "/ (repo root)" as the first
+ * choice and let them tab-complete or just type a sub-path that doesn't
+ * yet exist on the remote).
+ */
+export class RemoteFolderSuggest extends FuzzySuggestModal<string> {
+  private paths: string[] = ["/"];
+  private onChoose: (path: string) => void;
+
+  constructor(
+    app: App,
+    private client: GitHubClient,
+    private owner: string,
+    private repo: string,
+    private branch: string,
+    onChoose: (path: string) => void,
+  ) {
+    super(app);
+    this.onChoose = onChoose;
+    this.setPlaceholder("Loading folders…");
+  }
+
+  async load(): Promise<void> {
+    try {
+      // Branch may be empty (user hasn't picked one yet); fall back to repo default.
+      let branch = this.branch;
+      if (!branch) {
+        const info = await getRepo(this.client, this.owner, this.repo);
+        branch = info.defaultBranch;
+      }
+      const head = await getBranchHead(this.client, this.owner, this.repo, branch);
+      const { entries, truncated } = await getTreeRecursive(
+        this.client,
+        this.owner,
+        this.repo,
+        head.treeSha,
+      );
+      const folders = entries
+        .filter((e) => e.type === "tree")
+        .map((e) => e.path)
+        .sort();
+      this.paths = ["/", ...folders];
+      if (truncated) {
+        new Notice(
+          `Easy Git: ${this.owner}/${this.repo} has too many entries to list completely; you may need to type a deep path manually.`,
+        );
+      }
+      this.setPlaceholder("Choose a folder in the repo (or / for repo root)");
+      this.inputEl?.dispatchEvent(new Event("input"));
+    } catch (e) {
+      new Notice("Easy Git: failed to load folders — " + describeAuthError(e));
+      this.close();
+    }
+  }
+
+  getItems(): string[] {
+    return this.paths;
+  }
+
+  getItemText(p: string): string {
+    return p === "/" ? "/ (repo root)" : p;
+  }
+
+  onChooseItem(p: string): void {
+    // Repo root → empty string (the engine treats "" as "place files at
+    // the repo root"). Anything else is the path verbatim.
+    this.onChoose(p === "/" ? "" : p);
   }
 }
 
