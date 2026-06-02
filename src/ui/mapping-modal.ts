@@ -16,6 +16,7 @@ import {
   RepoSuggest,
   VaultFolderSuggest,
 } from "./pickers";
+import { ConfirmModal } from "./confirm-modal";
 
 export interface MappingModalOptions {
   initial?: FolderMapping;
@@ -336,6 +337,42 @@ export class EditMappingModal extends Modal {
     };
 
     const actionsRow = card.createDiv({ cls: "easy-git-destination-actions" });
+
+    // "Reset sync state" — escape hatch when lastSyncState has drifted out
+    // of step with reality (e.g. an interrupted earlier sync recorded a
+    // file as in-sync that's actually new on remote). Clears the state for
+    // this destination only. Next sync sees everything on remote as new:
+    // for pull-only mappings → re-pulls everything; for bidirectional →
+    // any local divergence shows up in the conflict modal.
+    const resetBtn = actionsRow.createEl("button", { text: "Reset sync state" });
+    resetBtn.setAttr(
+      "title",
+      "Clear this destination's sync history. Next sync re-scans the full remote tree as if it were a first run.",
+    );
+    if (!dest.lastSyncState) resetBtn.disabled = true;
+    resetBtn.onclick = () => {
+      const repoLabel = `${dest.repoOwner}/${dest.repoName}:${dest.branch}`;
+      new ConfirmModal(this.app, {
+        title: "Reset sync state?",
+        message:
+          `Clear sync history for ${repoLabel}. ` +
+          `The next sync will treat every remote file as new. ` +
+          `For pull-only mappings this re-pulls the entire remote folder. ` +
+          `For bidirectional mappings, anything where local and remote differ will surface in the conflict modal. ` +
+          `Your local files are never deleted by this action.`,
+        confirmText: "Reset",
+        destructive: true,
+        onConfirm: async () => {
+          dest.lastSyncState = undefined;
+          dest.lastSyncAt = undefined;
+          dest.lastSyncError = undefined;
+          this.renderDestinationsList();
+          this.updateDestinationsHeader();
+          new Notice("Easy Git: sync state cleared for this destination.");
+        },
+      }).open();
+    };
+
     const removeBtn = actionsRow.createEl("button", { text: "Remove" });
     removeBtn.addClass("mod-warning");
     removeBtn.onclick = () => {

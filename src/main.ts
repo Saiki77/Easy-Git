@@ -124,6 +124,12 @@ export default class EasyGitPlugin extends Plugin {
       callback: () => this.openSyncLog(),
     });
 
+    this.addCommand({
+      id: "easy-git-reset-sync-state",
+      name: "Reset sync state (force full re-scan on next sync)",
+      callback: () => this.pickMappingToResetState(),
+    });
+
     // Status bar indicator — shows aggregate sync state, clicks to open settings.
     this.statusBar = new StatusBarIndicator(
       this.addStatusBarItem(),
@@ -611,6 +617,39 @@ export default class EasyGitPlugin extends Plugin {
         await this.saveSettings();
       },
     }).open();
+  }
+
+  /**
+   * Command-palette entry: pick a mapping and clear every destination's
+   * lastSyncState. Use when you suspect the saved state has drifted out
+   * of step with reality (interrupted sync, manually edited remote,
+   * cross-machine drift). Next sync re-scans the full remote and treats
+   * everything as new — pull-only mappings re-pull everything;
+   * bidirectional mappings surface any divergence in the conflict modal.
+   */
+  private pickMappingToResetState(): void {
+    if (this.settings.mappings.length === 0) {
+      new Notice("Easy Git: no mappings configured.");
+      return;
+    }
+    new MappingNameSuggest(
+      this.app,
+      this.settings.mappings,
+      "Reset sync state for which mapping?",
+      (mapping) => {
+        for (const dest of mapping.destinations) {
+          dest.lastSyncState = undefined;
+          dest.lastSyncAt = undefined;
+          dest.lastSyncError = undefined;
+        }
+        void this.saveSettings();
+        this.settingsTab?.refreshSyncStates();
+        this.statusBar?.refresh();
+        new Notice(
+          `Easy Git: sync state cleared for "${mapping.name}". Next sync will re-scan from scratch.`,
+        );
+      },
+    ).open();
   }
 
   /**
