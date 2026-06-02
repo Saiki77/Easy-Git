@@ -508,3 +508,30 @@
   padding-top: 0.6rem;
   border-top: 1px solid var(--background-modifier-border);
 }
+
+.easy-git-diagnose .easy-git-diag-kv {
+  margin: 0.3rem 0 0.6rem;
+  padding-left: 1.2rem;
+  list-style-type: none;
+}
+
+.easy-git-diagnose .easy-git-diag-kv li {
+  margin: 0.1rem 0;
+  font-size: 0.9em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+}
+
+.easy-git-diagnose .easy-git-diag-kv-key {
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 11rem;
+}
+
+.easy-git-diagnose .easy-git-diag-kv-val {
+  color: var(--text-normal);
+  word-break: break-word;
+  font-family: var(--font-monospace);
+  font-size: 0.95em;
+}

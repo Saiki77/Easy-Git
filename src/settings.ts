@@ -350,6 +350,8 @@ export class EasyGitSettingTab extends PluginSettingTab {
       initial: existing,
       auth: this.plugin.settings.auth,
       excludedPaths: this.plugin.settings.excludedPaths,
+      settings: this.plugin.settings,
+      pluginVersion: this.plugin.manifest.version,
       onSave: async (m) => {
         const idx = this.plugin.settings.mappings.findIndex((x) => x.id === m.id);
         if (idx >= 0) {

@@ -7,6 +7,7 @@ import {
   FolderMapping,
   GitHubAuth,
   MappingDestination,
+  PluginSettings,
   SyncDirection,
   makeId,
 } from "../types";
@@ -23,6 +24,11 @@ export interface MappingModalOptions {
   initial?: FolderMapping;
   auth: GitHubAuth;
   excludedPaths: string[];
+  /** Full settings — passed through to DiagnoseModal for comprehensive
+   * diagnostic reports. Optional so call sites that don't need diagnose
+   * can stay simple. */
+  settings?: PluginSettings;
+  pluginVersion?: string;
   onSave: (mapping: FolderMapping) => Promise<void>;
 }
 
@@ -353,11 +359,17 @@ export class EditMappingModal extends Modal {
       diagnoseBtn.disabled = true;
     }
     diagnoseBtn.onclick = () => {
+      if (!this.opts.settings || !this.opts.pluginVersion) {
+        new Notice(
+          "Easy Git: diagnose isn't wired up from this entry point. Open settings → Edit mapping → Diagnose.",
+        );
+        return;
+      }
       new DiagnoseModal(this.app, {
         mapping: this.mapping,
         destination: dest,
-        auth: this.opts.auth,
-        excludedPaths: this.opts.excludedPaths,
+        settings: this.opts.settings,
+        pluginVersion: this.opts.pluginVersion,
       }).open();
     };
 
