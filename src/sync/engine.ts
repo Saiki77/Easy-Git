@@ -557,6 +557,20 @@ export class SyncEngine {
       }
     }
 
+    // Second pass: pick up dotfiles (.gitkeep, .gitignore, etc.) that
+    // Obsidian's vault layer filters out of TFolder.children. We walk the
+    // same folders via the low-level adapter, find files starting with `.`
+    // that we didn't already capture, and add them to the scan. Without
+    // this the classifier would emit pull-add for the same dotfile on
+    // every sync because local "doesn't have it" from the vault's POV —
+    // and the create would fail because the file IS on disk.
+    //
+    // We use the same folder set as the TFolder walk; dot-FOLDERS aren't
+    // handled here (TFolder walk doesn't enter them either) — that's a
+    // rarer case and the apply path's adapter fallback already keeps it
+    // functional, just noisy.
+    await this.augmentScanWithDotfiles(folder, mapping, files, excludePatterns, maxBytes);
+
     // Fold the deduplicated extra blobs (out-of-folder attachments) into the
     // local file map so the classifier treats them as locally-present files
     // at attachments/<basename> under the mapping.
@@ -703,19 +717,35 @@ export class SyncEngine {
     // mapping parameter is kept for API stability; behaviour no longer
     // varies by direction.
     void mapping;
+    const adapter = this.deps.app.vault.adapter;
     const file = this.deps.app.vault.getFileByPath(vaultPath);
-    if (!file) return false;
+    // Fallback for dotfiles and anything else vault.getFileByPath misses:
+    // check the disk directly via the adapter.
+    const onDisk = file ? true : await adapter.exists(vaultPath);
+    if (!file && !onDisk) return false;
 
     const backupPath = `.easy-git-backup/${timestamp}/${vaultPath}`;
     await ensureVaultFolder(this.deps.app, parentOf(backupPath));
 
     try {
-      if (isLikelyTextPath(file.path)) {
-        const text = await this.deps.app.vault.read(file);
-        await this.deps.app.vault.create(backupPath, text);
+      if (file) {
+        // Vault API path — preserves Obsidian's internal indexing.
+        if (isLikelyTextPath(file.path)) {
+          const text = await this.deps.app.vault.read(file);
+          await this.deps.app.vault.create(backupPath, text);
+        } else {
+          const buf = await this.deps.app.vault.readBinary(file);
+          await this.deps.app.vault.createBinary(backupPath, buf);
+        }
       } else {
-        const buf = await this.deps.app.vault.readBinary(file);
-        await this.deps.app.vault.createBinary(backupPath, buf);
+        // Adapter path — for dotfiles vault.getFileByPath couldn't see.
+        if (isLikelyTextPath(vaultPath)) {
+          const text = await adapter.read(vaultPath);
+          await adapter.write(backupPath, text);
+        } else {
+          const buf = await adapter.readBinary(vaultPath);
+          await adapter.writeBinary(backupPath, buf);
+        }
       }
       return true;
     } catch (e) {
@@ -809,6 +839,91 @@ export class SyncEngine {
     return computeGitBlobShaFromArrayBuffer(buf);
   }
 
+  /**
+   * Walk the mapping's vault folder tree at the low-level adapter layer
+   * and add any dotfile (basename starts with `.`) that the TFolder walk
+   * missed. Obsidian's TFolder.children filters dotfiles out of its
+   * results, so a `.gitkeep` or `.gitignore` that exists on disk would
+   * otherwise be invisible to the engine — and the next sync would try
+   * to pull it again, hit "file already exists" on the apply, and abort.
+   *
+   * Cheap: one `adapter.list()` per folder we already visited (Obsidian
+   * caches these). Only computes SHAs for the dotfiles found.
+   */
+  private async augmentScanWithDotfiles(
+    rootFolder: TFolder,
+    mapping: FolderMapping,
+    files: Record<string, LocalFileEntry>,
+    excludePatterns: string[],
+    maxBytes: number,
+  ): Promise<void> {
+    const adapter = this.deps.app.vault.adapter;
+    // Collect every folder path we visited so we can re-walk via adapter.
+    const folderPaths: string[] = [];
+    const stack: TFolder[] = [rootFolder];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      folderPaths.push(cur.path);
+      for (const child of cur.children) {
+        if (child instanceof TFolder) stack.push(child);
+      }
+    }
+
+    for (const folderPath of folderPaths) {
+      let listing: { files: string[]; folders: string[] };
+      try {
+        // adapter.list expects "" for vault root; TFolder.getRoot().path is "".
+        listing = await adapter.list(folderPath || "/");
+      } catch {
+        continue;
+      }
+      for (const filePath of listing.files) {
+        const basename = filePath.substring(filePath.lastIndexOf("/") + 1);
+        if (!basename.startsWith(".")) continue;
+        // Already captured by the TFolder walk? Skip.
+        const relPath = relativeTo(mapping.vaultFolder, filePath);
+        if (files[relPath]) continue;
+        // Honour the exclude list — dotfiles get the same treatment as
+        // normal files, so a `.git/**` global exclude still blocks
+        // `.git/whatever`, etc.
+        if (
+          isExcluded(filePath, excludePatterns) ||
+          isExcluded(relPath, excludePatterns)
+        ) {
+          continue;
+        }
+        // Size + content via the adapter (vault.read can't access this).
+        let stat: { size: number; mtime: number } | null;
+        try {
+          stat = (await adapter.stat(filePath)) as
+            | { size: number; mtime: number }
+            | null;
+        } catch {
+          continue;
+        }
+        if (!stat || stat.size > maxBytes) continue;
+        let sha: string;
+        try {
+          if (isLikelyTextPath(filePath)) {
+            const text = await adapter.read(filePath);
+            sha = await computeGitBlobShaFromString(text);
+          } else {
+            const buf = await adapter.readBinary(filePath);
+            sha = await computeGitBlobShaFromArrayBuffer(buf);
+          }
+        } catch {
+          continue;
+        }
+        files[relPath] = {
+          path: relPath,
+          sha,
+          size: stat.size,
+          mtime: stat.mtime,
+        };
+      }
+    }
+  }
+
   private async applyPullModify(
     mapping: FolderMapping,
     destination: MappingDestination,
@@ -850,30 +965,49 @@ export class SyncEngine {
   }
 
   /**
-   * Create a text file; if the path is already taken (case-insensitive
-   * collision on a case-insensitive filesystem), fall back to modify on the
-   * existing file rather than failing the whole sync.
+   * Create a text file. Handles two filesystem realities the high-level
+   * vault API can't:
+   *
+   * 1. Case-insensitive collisions (macOS/Windows): vault.create rejects
+   *    if a same-name-different-case file exists. Fall back to modify.
+   * 2. Files Obsidian's vault layer doesn't index — most notably dotfiles
+   *    like `.gitkeep` and `.gitignore` (Obsidian filters them out of
+   *    getFiles()/getFileByPath()) even when they exist on disk. The
+   *    high-level create rejects ("already exists") AND the vault-API
+   *    lookup returns null. Last resort: write via the low-level adapter
+   *    which is filesystem-faithful. That covers anything the vault
+   *    abstraction hides.
    */
   private async createOrFallbackText(path: string, text: string): Promise<void> {
     try {
       await this.deps.app.vault.create(path, text);
+      return;
     } catch (e) {
       if (!/already exists/i.test(String(e))) throw e;
-      const existing = findFileCaseInsensitive(this.deps.app, path);
-      if (!existing) throw e;
-      await this.deps.app.vault.modify(existing, text);
     }
+    const existing = findFileCaseInsensitive(this.deps.app, path);
+    if (existing) {
+      await this.deps.app.vault.modify(existing, text);
+      return;
+    }
+    // Adapter fallback for dotfiles and anything else vault.getFiles()
+    // doesn't surface.
+    await this.deps.app.vault.adapter.write(path, text);
   }
 
   private async createOrFallbackBinary(path: string, buf: ArrayBuffer): Promise<void> {
     try {
       await this.deps.app.vault.createBinary(path, buf);
+      return;
     } catch (e) {
       if (!/already exists/i.test(String(e))) throw e;
-      const existing = findFileCaseInsensitive(this.deps.app, path);
-      if (!existing) throw e;
-      await this.deps.app.vault.modifyBinary(existing, buf);
     }
+    const existing = findFileCaseInsensitive(this.deps.app, path);
+    if (existing) {
+      await this.deps.app.vault.modifyBinary(existing, buf);
+      return;
+    }
+    await this.deps.app.vault.adapter.writeBinary(path, buf);
   }
 
   private async applyPullDelete(
