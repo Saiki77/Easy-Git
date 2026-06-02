@@ -167,13 +167,46 @@ export class SyncEngine {
     );
 
     // 2. Read remote tree.
-    const remote = await listRemoteFolderFiles(
+    const remoteScan = await listRemoteFolderFiles(
       client,
       destination.repoOwner,
       destination.repoName,
       head.treeSha,
       destination.remoteFolder,
     );
+    const remote = remoteScan.files;
+    // Persist a one-time case correction when GitHub's remote folder
+    // casing differs from what we have stored. Future syncs hit the
+    // fast (exact-match) path.
+    if (
+      remoteScan.correctedPath &&
+      remoteScan.correctedPath !== destination.remoteFolder
+    ) {
+      if (this.deps.settings.debugLogging) {
+        console.log(
+          `Easy Git: remote folder case auto-corrected ` +
+            `"${destination.remoteFolder}" → "${remoteScan.correctedPath}" ` +
+            `(${destination.repoOwner}/${destination.repoName})`,
+        );
+      }
+      destination.remoteFolder = remoteScan.correctedPath;
+      await this.deps.saveSettings();
+    }
+    if (remoteScan.truncatedFallback && this.deps.settings.showNotifications) {
+      new Notice(
+        `Easy Git (${mapping.name}): the ${destination.repoOwner}/${destination.repoName} ` +
+          `tree is large enough that GitHub truncated the recursive listing. ` +
+          `Walked it folder-by-folder to make sure nothing was missed.`,
+        8000,
+      );
+    }
+    if (this.deps.settings.debugLogging) {
+      console.log(
+        `Easy Git: remote scan for ${destination.repoOwner}/${destination.repoName}` +
+          `:${destination.branch}/${destination.remoteFolder || "/"} → ` +
+          `${Object.keys(remote).length} files at commit ${head.commitSha.slice(0, 7)}`,
+      );
+    }
 
     // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
     if (

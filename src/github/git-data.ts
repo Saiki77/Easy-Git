@@ -136,12 +136,32 @@ export async function getTreeShallow(
 }
 
 /**
+ * Result of resolving a remote folder path under a tree.
+ *
+ * - `subtreeSha`: the resolved subtree SHA (or null if folder doesn't exist).
+ * - `correctedPath`: when the on-disk path differs in case from the requested
+ *   path (case-insensitive match), this is the actual GitHub-side casing so
+ *   the caller can persist a one-time fix. Undefined when the case matched.
+ */
+export interface SubtreeResolution {
+  subtreeSha: string | null;
+  correctedPath?: string;
+}
+
+/**
  * Walks the remote folder under {owner}/{repo}@{treeSha}/{remoteFolder}.
  * Returns entries keyed by path RELATIVE to remoteFolder (so a file at
  * "notes/work/foo.md" with remoteFolder="notes" becomes "work/foo.md").
  *
  * Returns empty object if the folder doesn't exist yet on the remote
  * (treated as a fresh first push).
+ *
+ * Falls back to a shallow-recursive walk when GitHub truncates the
+ * recursive tree response (~7MB / 100k entries) so we never silently
+ * miss new files in the truncated portion.
+ *
+ * Also returns a `correctedPath` when the remote folder is found via
+ * case-insensitive match so the engine can persist the fix.
  */
 export async function listRemoteFolderFiles(
   client: GitHubClient,
@@ -149,23 +169,79 @@ export async function listRemoteFolderFiles(
   repo: string,
   rootTreeSha: string,
   remoteFolder: string,
-): Promise<Record<string, RemoteFileEntry>> {
-  const subtreeSha = remoteFolder
-    ? await resolveSubtreeSha(client, owner, repo, rootTreeSha, remoteFolder)
-    : rootTreeSha;
-  if (!subtreeSha) return {};
-
-  const { entries } = await getTreeRecursive(client, owner, repo, subtreeSha);
-  const out: Record<string, RemoteFileEntry> = {};
-  for (const entry of entries) {
-    if (entry.type !== "blob") continue;
-    out[entry.path] = {
-      path: entry.path,
-      sha: entry.sha,
-      size: entry.size ?? 0,
-    };
+): Promise<{
+  files: Record<string, RemoteFileEntry>;
+  correctedPath?: string;
+  truncatedFallback: boolean;
+}> {
+  let subtreeSha: string;
+  let correctedPath: string | undefined;
+  if (remoteFolder) {
+    const res = await resolveSubtreeSha(client, owner, repo, rootTreeSha, remoteFolder);
+    if (!res.subtreeSha) {
+      return { files: {}, truncatedFallback: false };
+    }
+    subtreeSha = res.subtreeSha;
+    correctedPath = res.correctedPath;
+  } else {
+    subtreeSha = rootTreeSha;
   }
-  return out;
+
+  // Try the fast path: one recursive tree call.
+  const { entries, truncated } = await getTreeRecursive(client, owner, repo, subtreeSha);
+
+  if (!truncated) {
+    const files: Record<string, RemoteFileEntry> = {};
+    for (const entry of entries) {
+      if (entry.type !== "blob") continue;
+      files[entry.path] = {
+        path: entry.path,
+        sha: entry.sha,
+        size: entry.size ?? 0,
+      };
+    }
+    return { files, correctedPath, truncatedFallback: false };
+  }
+
+  // Recursive call truncated. Fall back to walking shallow trees so we
+  // see every blob. Each shallow call is much smaller than the recursive
+  // one, so cumulative truncation is effectively impossible for any vault
+  // a human would assemble.
+  const files = await walkShallowRecursive(client, owner, repo, subtreeSha);
+  return { files, correctedPath, truncatedFallback: true };
+}
+
+/**
+ * Walk a tree by issuing one shallow `git/trees/{sha}` call per subtree
+ * and recursing into children. Same final result as `?recursive=1` but
+ * not subject to truncation. Used as a fallback when the recursive call
+ * returns `truncated: true`.
+ */
+async function walkShallowRecursive(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  rootTreeSha: string,
+): Promise<Record<string, RemoteFileEntry>> {
+  const files: Record<string, RemoteFileEntry> = {};
+  // BFS — stack of (sha, prefix) pairs. Prefix is the path relative to
+  // the root we started from.
+  const stack: Array<{ sha: string; prefix: string }> = [
+    { sha: rootTreeSha, prefix: "" },
+  ];
+  while (stack.length > 0) {
+    const { sha, prefix } = stack.pop() as { sha: string; prefix: string };
+    const entries = await getTreeShallow(client, owner, repo, sha);
+    for (const entry of entries) {
+      const path = prefix ? `${prefix}/${entry.path}` : entry.path;
+      if (entry.type === "blob") {
+        files[path] = { path, sha: entry.sha, size: entry.size ?? 0 };
+      } else if (entry.type === "tree") {
+        stack.push({ sha: entry.sha, prefix: path });
+      }
+    }
+  }
+  return files;
 }
 
 async function resolveSubtreeSha(
@@ -174,22 +250,44 @@ async function resolveSubtreeSha(
   repo: string,
   rootTreeSha: string,
   folderPath: string,
-): Promise<string | null> {
+): Promise<SubtreeResolution> {
   const parts = folderPath.split("/").filter((p) => p.length > 0);
   let currentTreeSha = rootTreeSha;
+  const corrected: string[] = [];
+  let didCorrect = false;
+
   for (const part of parts) {
     let entries: TreeEntry[];
     try {
       entries = await getTreeShallow(client, owner, repo, currentTreeSha);
     } catch (e) {
-      if (e instanceof GitHubApiError && e.status === 404) return null;
+      if (e instanceof GitHubApiError && e.status === 404) {
+        return { subtreeSha: null };
+      }
       throw e;
     }
-    const match = entries.find((entry) => entry.path === part && entry.type === "tree");
-    if (!match) return null;
+
+    // Exact-case match first (the common path).
+    let match = entries.find((e) => e.path === part && e.type === "tree");
+    if (!match) {
+      // Case-insensitive fallback. Common when a user renamed the folder
+      // on GitHub (e.g. notes → Notes) but the mapping still stores the
+      // old casing. Caller persists the correction.
+      const lower = part.toLowerCase();
+      match = entries.find(
+        (e) => e.path.toLowerCase() === lower && e.type === "tree",
+      );
+      if (match) didCorrect = true;
+    }
+
+    if (!match) return { subtreeSha: null };
+    corrected.push(match.path);
     currentTreeSha = match.sha;
   }
-  return currentTreeSha;
+  return {
+    subtreeSha: currentTreeSha,
+    correctedPath: didCorrect ? corrected.join("/") : undefined,
+  };
 }
 
 export async function getBlobContent(

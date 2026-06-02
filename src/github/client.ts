@@ -69,6 +69,14 @@ export class GitHubClient {
       "User-Agent": this.userAgent,
       ...(extraHeaders ?? {}),
     };
+    // Bypass any HTTP-layer caching (Electron net stack honours
+    // Cache-Control / ETag headers GitHub sets on read endpoints — without
+    // this, the branch/tree endpoints can return stale data after a remote
+    // push and we'd report "up to date" against an old commit SHA).
+    if (method === "GET") {
+      headers["Cache-Control"] = "no-cache";
+      headers["Pragma"] = "no-cache";
+    }
     if (this.token) {
       headers["Authorization"] = `Bearer ${this.token}`;
     }
