@@ -349,6 +349,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
     new EditMappingModal(this.app, {
       initial: existing,
       auth: this.plugin.settings.auth,
+      excludedPaths: this.plugin.settings.excludedPaths,
       onSave: async (m) => {
         const idx = this.plugin.settings.mappings.findIndex((x) => x.id === m.id);
         if (idx >= 0) {

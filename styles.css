@@ -436,3 +436,75 @@
   padding: 0.25rem 0.6rem;
   font-size: 0.85em;
 }
+
+/* Diagnose modal — live view of what the engine sees for one destination. */
+.easy-git-diagnose .easy-git-diag-section {
+  margin: 1rem 0;
+}
+
+.easy-git-diagnose .easy-git-diag-section h3 {
+  font-size: 1em;
+  margin: 0.5rem 0 0.3rem;
+}
+
+.easy-git-diagnose .easy-git-diag-note {
+  margin: 0.3rem 0;
+  padding: 0.4rem 0.6rem;
+  background: var(--background-secondary);
+  border-left: 3px solid var(--text-accent);
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.easy-git-diagnose .easy-git-diag-files {
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0.3rem 0;
+  padding: 0.4rem 0.6rem 0.4rem 1.8rem;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  list-style-type: disc;
+}
+
+.easy-git-diagnose .easy-git-diag-files li {
+  color: var(--text-normal);
+  margin: 0.05rem 0;
+}
+
+.easy-git-diagnose .easy-git-diag-tag {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.easy-git-diagnose .easy-git-diag-positive h3,
+.easy-git-diagnose p.easy-git-diag-positive {
+  color: var(--text-success, #16a34a);
+}
+
+.easy-git-diagnose .easy-git-diag-error {
+  padding: 0.6rem 0.8rem;
+  background: var(--background-secondary);
+  border-left: 3px solid var(--text-error);
+  border-radius: 4px;
+}
+
+.easy-git-diagnose .easy-git-diag-error pre {
+  background: var(--background-primary);
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+}
+
+.easy-git-diagnose .easy-git-diag-footer {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--background-modifier-border);
+}

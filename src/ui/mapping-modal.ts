@@ -17,10 +17,12 @@ import {
   VaultFolderSuggest,
 } from "./pickers";
 import { ConfirmModal } from "./confirm-modal";
+import { DiagnoseModal } from "./diagnose-modal";
 
 export interface MappingModalOptions {
   initial?: FolderMapping;
   auth: GitHubAuth;
+  excludedPaths: string[];
   onSave: (mapping: FolderMapping) => Promise<void>;
 }
 
@@ -337,6 +339,27 @@ export class EditMappingModal extends Modal {
     };
 
     const actionsRow = card.createDiv({ cls: "easy-git-destination-actions" });
+
+    // "Diagnose" — show exactly what the engine sees for this destination
+    // right now: live branch SHA, files on remote, files locally (and
+    // whether they're excluded), files in lastSyncState. Cuts the time
+    // from "it doesn't work" to "ah, here's why" from minutes to seconds.
+    const diagnoseBtn = actionsRow.createEl("button", { text: "Diagnose" });
+    diagnoseBtn.setAttr(
+      "title",
+      "Show a live snapshot of what Easy Git sees for this destination — files on remote, files locally, what's excluded, what's tracked.",
+    );
+    if (!dest.repoOwner || !dest.repoName || !dest.branch) {
+      diagnoseBtn.disabled = true;
+    }
+    diagnoseBtn.onclick = () => {
+      new DiagnoseModal(this.app, {
+        mapping: this.mapping,
+        destination: dest,
+        auth: this.opts.auth,
+        excludedPaths: this.opts.excludedPaths,
+      }).open();
+    };
 
     // "Reset sync state" — escape hatch when lastSyncState has drifted out
     // of step with reality (e.g. an interrupted earlier sync recorded a
