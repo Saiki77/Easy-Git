@@ -129,6 +129,21 @@ To enable this, turn on **Auto-export SVG** (or PNG) in the Excalidraw plugin's 
 
 If no companion exists, Easy Git falls back to a plain link and surfaces a one-time Notice telling you how to enable auto-export.
 
+## Pull-only and push-only semantics
+
+A pull-only mapping treats the remote folder as the source of truth on every sync. The engine scans the live remote tree, scans your local vault folder, and reconciles — no dependency on a stored "sync history" cache that could drift out of step with reality.
+
+What this means in practice:
+
+- **A new file on GitHub appears locally on the next sync.** No state-cache lookup; if it's on remote and not local, it's pulled. Period.
+- **A changed file on GitHub overwrites local on the next sync.** The pre-existing local file is copied to `.easy-git-backup/<timestamp>/` first, so nothing is lost.
+- **A file deleted on GitHub is removed locally** only when local matches what we last pulled (i.e. you didn't edit it). If you edited a file locally and the file then disappeared from GitHub, your local edit is preserved and a Notice is logged.
+- **A file you create locally that was never on GitHub is left alone.** Pull-only doesn't mirror destruction — local-only additions stay. The plugin only deletes files it previously pulled itself.
+
+Push-only is symmetric: local is the source of truth; remote-only files the plugin never pushed are left alone; the plugin only deletes remote files it previously pushed.
+
+Bidirectional mappings use the full 3-way diff (with `lastSyncState` as the common ancestor) — that's the one direction where the cache is structurally necessary.
+
 ## Conflict handling
 
 When both sides of a sync changed a file since the last sync, Easy Git resolves it through a layered approach. Each step handles a different category; what survives lands in the conflict modal.

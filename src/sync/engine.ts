@@ -686,15 +686,23 @@ export class SyncEngine {
    * would overwrite or delete it.
    *
    * Returns true on success, false if no backup was needed (no existing
-   * local file, or mapping is pull-only). Throws on write failure — the
-   * caller aborts the whole sync rather than risk losing the original.
+   * local file). Throws on write failure — the caller aborts the whole
+   * sync rather than risk losing the original.
+   *
+   * Backs up for EVERY direction, including pull-only. The original v1.3
+   * spec skipped pull-only on the assumption "user opted into remote-
+   * wins"; v1.4.7 made the pull-only classifier reconcile aggressively
+   * against remote, so any local file the user accidentally edited could
+   * be overwritten without warning. The backup folder is the safety net.
    */
   private async backupVaultFile(
     mapping: FolderMapping,
     vaultPath: string,
     timestamp: string,
   ): Promise<boolean> {
-    if (mapping.direction === "pull") return false;
+    // mapping parameter is kept for API stability; behaviour no longer
+    // varies by direction.
+    void mapping;
     const file = this.deps.app.vault.getFileByPath(vaultPath);
     if (!file) return false;
 

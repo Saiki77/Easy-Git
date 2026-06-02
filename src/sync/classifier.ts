@@ -52,19 +52,97 @@ export function classify(input: ClassifyInput): ClassifyOutput {
     const remoteExists = !!r;
     const wasTracked = !!last;
 
-    if (!wasTracked) {
-      if (localExists && !remoteExists) {
-        if (direction === "pull") {
+    // -----------------------------------------------------------------
+    // PULL-ONLY: remote is the source of truth. Reconcile against what
+    // is on remote NOW, not against what lastSyncState recorded. This
+    // means a new remote file is pulled even when lastSyncState carries
+    // a stale entry for it from a previous failed/partial sync — drift
+    // self-heals on every sync instead of compounding.
+    //
+    // lastSyncState is still consulted, but only for one narrow purpose:
+    // distinguishing "remote deleted a file we previously pulled" (→
+    // pull-delete) from "user added a local-only file remote never had"
+    // (→ leave alone). That's the one signal we can't get from local +
+    // remote alone.
+    // -----------------------------------------------------------------
+    if (direction === "pull") {
+      if (remoteExists) {
+        if (!localExists) {
+          actions.push({ path, op: "pull-add", remoteSha });
+        } else if (localSha !== remoteSha) {
+          // Local file present but different. Engine backs up local
+          // before pull-modify writes, so user content is preserved.
+          actions.push({ path, op: "pull-modify", remoteSha });
+        } else {
+          noopCount += 1;
+        }
+      } else {
+        // Not on remote.
+        if (!localExists) {
+          // Gone everywhere; drop from state next round.
+          noopCount += 1;
+        } else if (wasTracked && localSha === lastSha) {
+          // We previously pulled this from remote, user hasn't touched
+          // it, remote removed it → pull-delete (with backup).
+          actions.push({ path, op: "pull-delete", localSha });
+        } else if (wasTracked && localSha !== lastSha) {
+          // We previously pulled this AND user edited it locally AND
+          // remote removed it. Conservative: keep the user's edit.
+          // Log so the user knows.
           informationalLocalChanges.push(path);
         } else {
-          actions.push({ path, op: "push-add", localSha });
+          // Never on remote, user-added local-only file. Leave alone.
+          // (Not even an info entry — this is a permanent state, not
+          // a "change since last sync".)
         }
-      } else if (!localExists && remoteExists) {
-        if (direction === "push") {
+      }
+      continue;
+    }
+
+    // -----------------------------------------------------------------
+    // PUSH-ONLY: local is the source of truth. Mirror semantics to pull-
+    // only, just flipped. lastSyncState distinguishes "user deleted a
+    // file we previously pushed" (→ push-delete) from "someone else
+    // added a file directly on the remote we should leave alone".
+    // -----------------------------------------------------------------
+    if (direction === "push") {
+      if (localExists) {
+        if (!remoteExists) {
+          actions.push({ path, op: "push-add", localSha });
+        } else if (localSha !== remoteSha) {
+          actions.push({ path, op: "push-modify", localSha });
+        } else {
+          noopCount += 1;
+        }
+      } else {
+        if (!remoteExists) {
+          noopCount += 1;
+        } else if (wasTracked && remoteSha === lastSha) {
+          // We previously pushed this, remote still matches, user
+          // deleted locally → push the deletion through.
+          actions.push({ path, op: "push-delete", remoteSha });
+        } else if (wasTracked && remoteSha !== lastSha) {
+          // We previously pushed this, someone changed it on remote,
+          // user deleted locally → conservative: leave remote alone.
           informationalRemoteChanges.push(path);
         } else {
-          actions.push({ path, op: "pull-add", remoteSha });
+          // Remote-only file we never pushed. Leave alone (don't delete
+          // remote content the user didn't put there).
         }
+      }
+      continue;
+    }
+
+    // -----------------------------------------------------------------
+    // BIDIRECTIONAL ("both"): the original 3-way logic. lastSyncState
+    // is essential here as the common ancestor — without it we can't
+    // tell which side edited.
+    // -----------------------------------------------------------------
+    if (!wasTracked) {
+      if (localExists && !remoteExists) {
+        actions.push({ path, op: "push-add", localSha });
+      } else if (!localExists && remoteExists) {
+        actions.push({ path, op: "pull-add", remoteSha });
       } else if (localExists && remoteExists) {
         if (localSha === remoteSha) {
           noopCount += 1;
@@ -86,17 +164,9 @@ export function classify(input: ClassifyInput): ClassifyOutput {
       if (!localChanged && !remoteChanged) {
         noopCount += 1;
       } else if (localChanged && !remoteChanged) {
-        if (direction === "pull") {
-          informationalLocalChanges.push(path);
-        } else {
-          actions.push({ path, op: "push-modify", localSha });
-        }
+        actions.push({ path, op: "push-modify", localSha });
       } else if (!localChanged && remoteChanged) {
-        if (direction === "push") {
-          informationalRemoteChanges.push(path);
-        } else {
-          actions.push({ path, op: "pull-modify", remoteSha });
-        }
+        actions.push({ path, op: "pull-modify", remoteSha });
       } else {
         if (localSha === remoteSha) {
           noopCount += 1;
@@ -112,11 +182,7 @@ export function classify(input: ClassifyInput): ClassifyOutput {
     } else if (!localExists && remoteExists) {
       const remoteChanged = remoteSha !== lastSha;
       if (!remoteChanged) {
-        if (direction === "pull") {
-          informationalLocalChanges.push(path);
-        } else {
-          actions.push({ path, op: "push-delete", remoteSha });
-        }
+        actions.push({ path, op: "push-delete", remoteSha });
       } else {
         conflicts.push({
           path,
@@ -127,11 +193,7 @@ export function classify(input: ClassifyInput): ClassifyOutput {
     } else if (localExists && !remoteExists) {
       const localChanged = localSha !== lastSha;
       if (!localChanged) {
-        if (direction === "push") {
-          informationalRemoteChanges.push(path);
-        } else {
-          actions.push({ path, op: "pull-delete", localSha });
-        }
+        actions.push({ path, op: "pull-delete", localSha });
       } else {
         conflicts.push({
           path,
