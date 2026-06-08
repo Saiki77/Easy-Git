@@ -113,11 +113,10 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   mappings: [],
   defaultCommitTemplate:
     "Sync from Obsidian ({mapping}): {datetime} — {added}+ {modified}~ {deleted}-",
+  // The vault's config folder is excluded at runtime by healSettings() via
+  // app.vault.configDir (it isn't always ".obsidian"), so it's intentionally
+  // not hardcoded here.
   excludedPaths: [
-    // Sensible default; the actual (possibly custom) config dir is added at
-    // runtime by healSettings() via app.vault.configDir.
-    // eslint-disable-next-line obsidianmd/hardcoded-config-path
-    ".obsidian/**",
     ".trash/**",
     ".git/**",
     "node_modules/**",
