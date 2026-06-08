@@ -129,6 +129,35 @@ To enable this, turn on **Auto-export SVG** (or PNG) in the Excalidraw plugin's 
 
 If no companion exists, Easy Git falls back to a plain link and surfaces a one-time Notice telling you how to enable auto-export.
 
+### Callouts, highlights, and math (lossless round-trip)
+
+Obsidian uses several markdown features that GitHub doesn't render the same way:
+
+- **Callouts:** Obsidian supports `[!info]`, `[!example]`, `[!question]`, and about a dozen more types. GitHub renders only five: `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`. Anything outside that set shows the literal `[!type]` text in a plain blockquote.
+- **Highlights:** `==highlighted text==` is Obsidian syntax. GitHub shows the `==` literally.
+- **Math:** GitHub's KaTeX runs in safe mode and rejects certain macros — the most common offender is `\phantom` (and `\hphantom` / `\vphantom`). The math block renders as a red error.
+
+At push time, Easy Git rewrites each of these into the form GitHub renders correctly:
+
+| Source | Pushed to GitHub |
+| --- | --- |
+| `> [!example] Title` | `> [!TIP] <!--easygit-callout:original=example,collapse=-->Title` |
+| `==highlighted==` | `<mark>highlighted</mark>` |
+| `$$\phantom{(\ast)\quad} x$$` | `<!--easygit-math:phantoms=[{"kind":"phantom","args":"(\\ast)\\quad"}]-->$$\hspace{0.5em} x$$` |
+
+The HTML comments are invisible in rendered Obsidian and rendered GitHub. They survive in the raw `.md` source on GitHub (you'll see them if you open the file in raw view), which is what makes the round-trip work: on pull, Easy Git reads the markers and restores the original Obsidian syntax byte-for-byte.
+
+What this means in practice:
+
+- **Your vault source stays Obsidian-native.** You write `[!example]` and `==highlight==`; the rewrite is push-side only.
+- **GitHub renders cleanly.** Callouts get the right icon and colour, highlights appear yellow, math equations don't error.
+- **Anyone pulling via Easy Git gets the Obsidian source back.** Whether it's a multi-device setup syncing the same vault, or a fresh checkout in another vault — the restored markdown is identical to the original.
+- **Anyone cloning the repo without Easy Git sees the GitHub form** (with the small `<!--easygit-…-->` markers in raw view). Rendered view on github.com is clean.
+
+The math transform has one small trade-off: GitHub renders `\hspace{0.5em}` instead of the original `\phantom{…}`, so the visual alignment can be slightly off (the spacer width is constant rather than matched to the phantom's content). The round-trip back to Obsidian is exact — pulling restores `\phantom{…}` with its original arguments.
+
+All of this is gated on the same per-mapping toggle as the wikilink rewrite ("GitHub rendering pass"), which is on by default.
+
 ## Pull-only and push-only semantics
 
 A pull-only mapping treats the remote folder as the source of truth on every sync. The engine scans the live remote tree, scans your local vault folder, and reconciles — no dependency on a stored "sync history" cache that could drift out of step with reality.

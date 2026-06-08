@@ -201,9 +201,9 @@ export class EditMappingModal extends Modal {
       );
 
     new Setting(contentEl)
-      .setName("Convert Obsidian wikilinks for GitHub")
+      .setName("GitHub rendering pass (wikilinks, callouts, highlights, math)")
       .setDesc(
-        "Rewrites ![[image.png]] to ![](image.png) at push time so GitHub renders images inline. Attachments outside this folder are copied to attachments/ on the remote. Your vault files are not modified.",
+        "At push: rewrites ![[image.png]] to ![](image.png), Obsidian callouts to GitHub-compatible types, ==highlights== to <mark>, and KaTeX-blocked \\phantom to \\hspace. Each rewrite embeds a marker so the pull side restores the original Obsidian source losslessly. Your vault files are never modified.",
       )
       .addToggle((t) =>
         t

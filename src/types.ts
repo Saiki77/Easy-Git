@@ -193,6 +193,21 @@ export interface SyncResult {
   /** Number of `both-edited` conflicts auto-resolved by 3-way merge using
    * GitHub's stored base blob. */
   mergedConflicts?: number;
+  /** Push-side: Obsidian-only callouts (`[!info]`, `[!example]`, etc.) rewritten
+   * to GitHub-supported types so they render. */
+  calloutsRewritten?: number;
+  /** Push-side: `==highlights==` rewritten to `<mark>` so they render on GitHub. */
+  highlightsRewritten?: number;
+  /** Push-side: KaTeX-blocked math macros (`\phantom`/`\hphantom`/`\vphantom`)
+   * rewritten to `\hspace` so the equation renders instead of failing. */
+  mathMacrosRewritten?: number;
+  /** Pull-side: callouts restored from GitHub form back to the original
+   * Obsidian source. Silent — not surfaced as a Notice. */
+  calloutsRestored?: number;
+  /** Pull-side: highlights restored from `<mark>` back to `==…==`. */
+  highlightsRestored?: number;
+  /** Pull-side: math macros restored from `\hspace` back to `\phantom` etc. */
+  mathMacrosRestored?: number;
   /** Paths that were added/modified/deleted in this run (push or pull side). */
   changedPaths?: string[];
 }

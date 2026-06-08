@@ -764,6 +764,26 @@ export default class EasyGitPlugin extends Plugin {
             8000,
           );
         }
+        // Push-side GitHub-rendering rewrites — single combined Notice so
+        // we don't drown the user in three separate toasts when all three
+        // ran. Pull-side restores are intentionally silent (the user
+        // didn't initiate them; they're invisible from their POV).
+        const ghParts: string[] = [];
+        if (result.calloutsRewritten && result.calloutsRewritten > 0) {
+          ghParts.push(`${result.calloutsRewritten} callout${result.calloutsRewritten === 1 ? "" : "s"}`);
+        }
+        if (result.highlightsRewritten && result.highlightsRewritten > 0) {
+          ghParts.push(`${result.highlightsRewritten} highlight${result.highlightsRewritten === 1 ? "" : "s"}`);
+        }
+        if (result.mathMacrosRewritten && result.mathMacrosRewritten > 0) {
+          ghParts.push(`${result.mathMacrosRewritten} math macro${result.mathMacrosRewritten === 1 ? "" : "s"}`);
+        }
+        if (ghParts.length > 0 && this.settings.showNotifications) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): rewrote ${ghParts.join(", ")} for GitHub rendering (reversible on pull).`,
+            6000,
+          );
+        }
       }
     }
   }

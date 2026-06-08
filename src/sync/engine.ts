@@ -43,7 +43,19 @@ import {
   WikilinkResolver,
   rewriteWikilinks,
 } from "./wikilink-rewrite";
+import {
+  applyPullRestores,
+  applyPushTransforms,
+} from "./markdown-transforms";
 import { merge as diff3Merge } from "node-diff3";
+
+/** Counts returned by applyPullModify so runOnce can sum them into the
+ * sync result. Only the keys whose count > 0 are set. */
+interface PullRestoreCounts {
+  calloutsRestored?: number;
+  highlightsRestored?: number;
+  mathMacrosRestored?: number;
+}
 
 export interface SyncEngineDeps {
   app: App;
@@ -236,6 +248,15 @@ export class SyncEngine {
     if (localScan.excalidrawMissingCompanion > 0) {
       baseResult.excalidrawMissingCompanion = localScan.excalidrawMissingCompanion;
     }
+    if (localScan.calloutsRewritten > 0) {
+      baseResult.calloutsRewritten = localScan.calloutsRewritten;
+    }
+    if (localScan.highlightsRewritten > 0) {
+      baseResult.highlightsRewritten = localScan.highlightsRewritten;
+    }
+    if (localScan.mathMacrosRewritten > 0) {
+      baseResult.mathMacrosRewritten = localScan.mathMacrosRewritten;
+    }
 
     // 4. Load last-sync state for THIS destination.
     const lastState: Record<string, FileSyncRecord> =
@@ -341,14 +362,22 @@ export class SyncEngine {
     // mapping direction is "pull" (user opted into remote-wins).
     // backupTimestamp was computed above so step 6.05 can use it too.
     let backupsCreated = 0;
+    let calloutsRestored = 0;
+    let highlightsRestored = 0;
+    let mathMacrosRestored = 0;
+    const accumulate = (c: PullRestoreCounts) => {
+      if (c.calloutsRestored) calloutsRestored += c.calloutsRestored;
+      if (c.highlightsRestored) highlightsRestored += c.highlightsRestored;
+      if (c.mathMacrosRestored) mathMacrosRestored += c.mathMacrosRestored;
+    };
     for (const action of actions) {
       if (action.op === "pull-modify") {
         const fullPath = vaultPathFor(mapping, action.path);
         const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
         if (backed) backupsCreated += 1;
-        await this.applyPullModify(mapping, destination, action, client);
+        accumulate(await this.applyPullModify(mapping, destination, action, client));
       } else if (action.op === "pull-add") {
-        await this.applyPullModify(mapping, destination, action, client);
+        accumulate(await this.applyPullModify(mapping, destination, action, client));
       } else if (action.op === "pull-delete") {
         const fullPath = vaultPathFor(mapping, action.path);
         const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
@@ -361,6 +390,9 @@ export class SyncEngine {
         (baseResult.backupsCreated ?? 0) + backupsCreated;
       baseResult.backupFolder = `.easy-git-backup/${backupTimestamp}/`;
     }
+    if (calloutsRestored > 0) baseResult.calloutsRestored = calloutsRestored;
+    if (highlightsRestored > 0) baseResult.highlightsRestored = highlightsRestored;
+    if (mathMacrosRestored > 0) baseResult.mathMacrosRestored = mathMacrosRestored;
 
     // 8. Build remote commit if push actions exist.
     const pushActions = actions.filter(
@@ -448,6 +480,9 @@ export class SyncEngine {
     unresolvedWikilinks: number;
     rewrittenWikilinks: number;
     excalidrawMissingCompanion: number;
+    calloutsRewritten: number;
+    highlightsRewritten: number;
+    mathMacrosRewritten: number;
   }> {
     const isWholeVault = isVaultRoot(mapping.vaultFolder);
     let folder: TFolder | null;
@@ -505,6 +540,9 @@ export class SyncEngine {
     let unresolvedWikilinks = 0;
     let rewrittenWikilinks = 0;
     let excalidrawMissingCompanion = 0;
+    let calloutsRewritten = 0;
+    let highlightsRewritten = 0;
+    let mathMacrosRewritten = 0;
     const accumulatedExtraBlobs: ExtraBlob[] = [];
 
     const stack: TFolder[] = [folder];
@@ -530,10 +568,17 @@ export class SyncEngine {
               mappingRemoteFolder: "",
               resolve: this.makeResolver(),
             });
-            const finalText = result.markdown;
+            // Second pass: GitHub-rendering rewrites (callouts, highlights,
+            // math). All three embed restore markers so the pull side can
+            // invert them losslessly. Same gate as wikilink rewrite.
+            const renderResult = applyPushTransforms(result.markdown);
+            const finalText = renderResult.markdown;
             unresolvedWikilinks += result.unresolvedCount;
             rewrittenWikilinks += result.rewrittenCount;
             excalidrawMissingCompanion += result.excalidrawMissingCompanion;
+            calloutsRewritten += renderResult.calloutsRewritten;
+            highlightsRewritten += renderResult.highlightsRewritten;
+            mathMacrosRewritten += renderResult.mathMacrosRewritten;
             for (const blob of result.extraBlobs) {
               accumulatedExtraBlobs.push(blob);
             }
@@ -600,6 +645,9 @@ export class SyncEngine {
       unresolvedWikilinks,
       rewrittenWikilinks,
       excalidrawMissingCompanion,
+      calloutsRewritten,
+      highlightsRewritten,
+      mathMacrosRewritten,
     };
   }
 
@@ -929,8 +977,9 @@ export class SyncEngine {
     destination: MappingDestination,
     action: FileAction,
     client: GitHubClient,
-  ): Promise<void> {
-    if (!action.remoteSha) return;
+  ): Promise<PullRestoreCounts> {
+    const counts: PullRestoreCounts = {};
+    if (!action.remoteSha) return counts;
     const fullPath = vaultPathFor(mapping, action.path);
     try {
       const blob = await getBlobContent(
@@ -945,7 +994,22 @@ export class SyncEngine {
         findFileCaseInsensitive(this.deps.app, fullPath);
       const isText = isLikelyTextPath(fullPath) && blob.encoding !== "base64-binary";
       if (isText) {
-        const text = base64ToString(blob.content);
+        let text = base64ToString(blob.content);
+        // Pull-side restore: invert the push-time GitHub rendering
+        // rewrites (callouts, highlights, math) for .md files when
+        // rewriteWikilinks is enabled. No-op on files that have no
+        // markers (i.e. files never push-processed) — pure function.
+        if (
+          isRewriteEnabled(mapping) &&
+          mapping.direction !== "push" &&
+          fullPath.toLowerCase().endsWith(".md")
+        ) {
+          const restored = applyPullRestores(text);
+          text = restored.markdown;
+          if (restored.calloutsRestored > 0) counts.calloutsRestored = restored.calloutsRestored;
+          if (restored.highlightsRestored > 0) counts.highlightsRestored = restored.highlightsRestored;
+          if (restored.mathMacrosRestored > 0) counts.mathMacrosRestored = restored.mathMacrosRestored;
+        }
         if (existing) {
           await this.deps.app.vault.modify(existing, text);
         } else {
@@ -962,6 +1026,7 @@ export class SyncEngine {
     } catch (e) {
       throw annotateWithPath(e, fullPath);
     }
+    return counts;
   }
 
   /**
