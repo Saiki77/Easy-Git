@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -42,6 +44,15 @@ jobs:
             exit 1
           fi
 
+      - name: Extract release notes from annotated tag
+        run: |
+          # Use the annotated tag's message as the release body so every
+          # release has a description (Obsidian validator flags empty ones).
+          git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME} of Easy Git." > release-notes.md
+          fi
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -55,6 +66,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
           files: |

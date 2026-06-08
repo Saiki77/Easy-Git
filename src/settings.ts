@@ -4,6 +4,7 @@ import { FolderMapping } from "./types";
 import { EditMappingModal } from "./ui/mapping-modal";
 import { DeviceFlowModal } from "./ui/device-flow-modal";
 import { ConfirmModal } from "./ui/confirm-modal";
+import { markButtonDestructive } from "./ui/button-compat";
 import { GitHubClient } from "./github/client";
 import {
   describeAuth,
@@ -28,7 +29,15 @@ export class EasyGitSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  // Obsidian's entry point. Kept minimal so internal re-renders call
+  // render() directly — display() is deprecated since 1.13.0, but we still
+  // override it because our minAppVersion (1.6.6) predates the declarative
+  // getSettingDefinitions API.
   display(): void {
+    this.render();
+  }
+
+  private render(): void {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("easy-git-settings");
@@ -189,7 +198,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
                 await this.plugin.saveSettings();
                 status.setText(describeAuth(this.plugin.settings.auth));
                 new Notice("Easy Git: signed in with GitHub.");
-                this.display();
+                this.render();
               },
             });
             modal.open();
@@ -224,15 +233,14 @@ export class EasyGitSettingTab extends PluginSettingTab {
       .setName("Clear credentials")
       .setDesc("Removes the stored token.")
       .addButton((b) =>
-        b
-          .setWarning()
+        markButtonDestructive(b)
           .setButtonText("Clear")
           .onClick(async () => {
             this.plugin.settings.auth = { method: "none", token: "" };
             await this.plugin.saveSettings();
             status.setText(describeAuth(this.plugin.settings.auth));
             new Notice("Easy Git: credentials cleared.");
-            this.display();
+            this.render();
           }),
       );
   }
@@ -339,7 +347,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
           );
           await this.plugin.saveSettings();
           this.plugin.refreshAutoSyncWiring();
-          this.display();
+          this.render();
         },
       }).open();
     };
@@ -361,7 +369,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
         }
         await this.plugin.saveSettings();
         this.plugin.refreshAutoSyncWiring();
-        this.display();
+        this.render();
       },
     }).open();
   }

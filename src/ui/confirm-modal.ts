@@ -1,4 +1,5 @@
 import { App, Modal, Setting } from "obsidian";
+import { markButtonDestructive } from "./button-compat";
 
 export interface ConfirmModalOptions {
   title: string;
@@ -34,7 +35,7 @@ export class ConfirmModal extends Modal {
           this.close();
           await this.opts.onConfirm();
         });
-        if (this.opts.destructive) b.setWarning();
+        if (this.opts.destructive) markButtonDestructive(b);
         else b.setCta();
       });
   }

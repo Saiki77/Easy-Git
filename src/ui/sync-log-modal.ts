@@ -1,5 +1,6 @@
 import { App, Modal, Setting } from "obsidian";
 import { SyncLogEntry } from "../types";
+import { markButtonDestructive } from "./button-compat";
 
 export interface SyncLogModalOptions {
   entries: SyncLogEntry[];
@@ -105,8 +106,7 @@ export class SyncLogModal extends Modal {
   private renderFooter(parent: HTMLElement): void {
     new Setting(parent)
       .addButton((b) =>
-        b
-          .setWarning()
+        markButtonDestructive(b)
           .setButtonText("Clear log")
           .onClick(async () => {
             await this.opts.onClear();

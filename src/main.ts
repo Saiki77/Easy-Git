@@ -41,7 +41,10 @@ interface MappingDebouncer {
 }
 
 export default class EasyGitPlugin extends Plugin {
-  settings!: PluginSettings;
+  // `declare` overrides the base Plugin.settings (typed `unknown` since
+  // Obsidian 1.13.0) with our concrete type without emitting a field that
+  // would shadow it. Assigned in loadSettings().
+  declare settings: PluginSettings;
   private engine!: SyncEngine;
   private intervalHandles: Map<string, number> = new Map();
   private onSaveDebouncers: Map<string, MappingDebouncer> = new Map();

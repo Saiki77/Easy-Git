@@ -1,6 +1,6 @@
 {
   "name": "easy-git",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "A secure, plug-and-play way to sync individual vault folders or sections with GitHub.",
   "main": "main.js",
   "scripts": {
@@ -23,7 +23,7 @@
     "esbuild": "^0.24.0",
     "eslint": "^9.39.4",
     "eslint-plugin-obsidianmd": "^0.3.0",
-    "obsidian": "latest",
+    "obsidian": "^1.13.0",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.60.1"
   },
