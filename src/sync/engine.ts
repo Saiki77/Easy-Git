@@ -943,9 +943,7 @@ export class SyncEngine {
         // Size + content via the adapter (vault.read can't access this).
         let stat: { size: number; mtime: number } | null;
         try {
-          stat = (await adapter.stat(filePath)) as
-            | { size: number; mtime: number }
-            | null;
+          stat = await adapter.stat(filePath);
         } catch {
           continue;
         }
@@ -1084,7 +1082,9 @@ export class SyncEngine {
       const existing =
         this.deps.app.vault.getFileByPath(fullPath) ??
         findFileCaseInsensitive(this.deps.app, fullPath);
-      if (existing) await this.deps.app.vault.delete(existing);
+      // Use trashFile so the deletion respects the user's "deleted files"
+      // preference (system trash / .trash / permanent) instead of hard-deleting.
+      if (existing) await this.deps.app.fileManager.trashFile(existing);
     } catch (e) {
       throw annotateWithPath(e, fullPath);
     }
@@ -1430,7 +1430,7 @@ function annotateWithPath(err: unknown, path: string): Error {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
+  return new Promise((res) => window.setTimeout(res, ms));
 }
 
 function backoffMs(attempt: number): number {

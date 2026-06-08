@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint (Obsidian plugin guidelines)
+        run: npm run lint
+
       - name: Build plugin
         run: npm run build
 

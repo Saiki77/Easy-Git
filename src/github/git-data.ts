@@ -17,7 +17,8 @@ export interface RepoInfo {
 export interface BlobContent {
   sha: string;
   size: number;
-  encoding: "base64" | "utf-8" | string;
+  /** GitHub returns "base64" or "utf-8"; typed as string to stay forward-compatible. */
+  encoding: string;
   content: string;
 }
 

@@ -2,6 +2,13 @@
 
 .easy-git-status-bar {
   color: var(--text-muted);
+  cursor: pointer;
+}
+.easy-git-status-bar.is-hidden {
+  display: none;
+}
+.easy-git-fullwidth-input {
+  width: 100%;
 }
 .easy-git-status-bar.is-syncing {
   color: #7c3aed;

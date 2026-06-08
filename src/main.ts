@@ -29,6 +29,12 @@ import { StatusBarIndicator, StatusState } from "./ui/status-bar";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
+/** Obsidian's settings controller is not in the public typings but is stable
+ * at runtime. A narrow typed view lets us open settings without `any`. */
+interface AppWithSetting {
+  setting: { open(): void; openTabById(id: string): void };
+}
+
 interface MappingDebouncer {
   trigger: () => void;
   cancel: () => void;
@@ -72,13 +78,13 @@ export default class EasyGitPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "easy-git-sync-all",
+      id: "sync-all",
       name: "Sync all mappings",
       callback: () => void this.syncAll("command"),
     });
 
     this.addCommand({
-      id: "easy-git-sync-mapping",
+      id: "sync-mapping",
       name: "Sync mapping…",
       callback: () => {
         this.openMappingPicker("Sync mapping…", (m) =>
@@ -88,7 +94,7 @@ export default class EasyGitPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "easy-git-push-mapping",
+      id: "push-mapping",
       name: "Push mapping…",
       callback: () => {
         this.openMappingPicker("Push mapping…", (m) =>
@@ -98,7 +104,7 @@ export default class EasyGitPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "easy-git-pull-mapping",
+      id: "pull-mapping",
       name: "Pull mapping…",
       callback: () => {
         this.openMappingPicker("Pull mapping…", (m) =>
@@ -108,24 +114,19 @@ export default class EasyGitPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "easy-git-open-settings",
+      id: "open-settings",
       name: "Open settings",
-      callback: () => {
-        // @ts-expect-error setting is private but accessible at runtime
-        this.app.setting.open();
-        // @ts-expect-error setting is private but accessible at runtime
-        this.app.setting.openTabById(this.manifest.id);
-      },
+      callback: () => this.openEasyGitSettings(),
     });
 
     this.addCommand({
-      id: "easy-git-show-log",
+      id: "show-log",
       name: "Show sync log",
       callback: () => this.openSyncLog(),
     });
 
     this.addCommand({
-      id: "easy-git-reset-sync-state",
+      id: "reset-sync-state",
       name: "Reset sync state (force full re-scan on next sync)",
       callback: () => this.pickMappingToResetState(),
     });
@@ -179,10 +180,9 @@ export default class EasyGitPlugin extends Plugin {
   }
 
   private openEasyGitSettings(): void {
-    // @ts-expect-error setting is private but accessible at runtime
-    this.app.setting.open();
-    // @ts-expect-error setting is private but accessible at runtime
-    this.app.setting.openTabById(this.manifest.id);
+    const settingApp = this.app as unknown as AppWithSetting;
+    settingApp.setting.open();
+    settingApp.setting.openTabById(this.manifest.id);
   }
 
   /**
@@ -341,7 +341,9 @@ export default class EasyGitPlugin extends Plugin {
       ".easy-git-backup/**",
       ".DS_Store",
       ".trash/**",
-      ".obsidian/**",
+      // Use the vault's actual config dir (the user may have changed it from
+      // the default ".obsidian").
+      `${this.app.vault.configDir}/**`,
       ".git/**",
     ];
     if (!Array.isArray(s.excludedPaths)) {
@@ -604,7 +606,7 @@ export default class EasyGitPlugin extends Plugin {
       if (this.pendingAfterSync.has(id)) {
         this.pendingAfterSync.delete(id);
         // schedule another run on a microtask so we don't recurse the stack
-        setTimeout(() => void this.syncMapping(id, "on-save"), 0);
+        window.setTimeout(() => void this.syncMapping(id, "on-save"), 0);
       }
     }
   }
@@ -844,12 +846,7 @@ export default class EasyGitPlugin extends Plugin {
       i
         .setTitle("Open Easy Git settings")
         .setIcon("settings")
-        .onClick(() => {
-          // @ts-expect-error setting is private but accessible at runtime
-          this.app.setting.open();
-          // @ts-expect-error setting is private but accessible at runtime
-          this.app.setting.openTabById(this.manifest.id);
-        }),
+        .onClick(() => this.openEasyGitSettings()),
     );
     menu.showAtMouseEvent(evt);
   }

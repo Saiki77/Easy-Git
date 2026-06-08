@@ -28,7 +28,6 @@ export class StatusBarIndicator {
     this.el.addClass("easy-git-status-bar");
     this.getState = getState;
     this.openSettings = openSettings;
-    this.el.style.cursor = "pointer";
     this.el.addEventListener("click", () => this.openSettings());
     this.refresh();
   }
@@ -44,11 +43,10 @@ export class StatusBarIndicator {
     this.el.empty();
 
     if (!state.hasMappings) {
+      // .is-hidden carries `display: none` in styles.css.
       this.el.addClass("is-hidden");
-      this.el.style.display = "none";
       return;
     }
-    this.el.style.display = "";
 
     if (state.anySyncing) {
       this.el.addClass("is-syncing");

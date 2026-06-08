@@ -80,7 +80,7 @@ export class ConflictResolutionModal extends Modal {
               const next = b.buttonEl;
               next.classList.add("mod-warning");
               next.setText("Pick a choice for every file first");
-              setTimeout(() => {
+              window.setTimeout(() => {
                 next.classList.remove("mod-warning");
                 next.setText("Apply resolutions");
               }, 1800);

@@ -496,7 +496,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
       .setDesc("One glob per line. Matched against vault-relative paths.")
       .addTextArea((t) => {
         t.inputEl.rows = 5;
-        t.inputEl.style.width = "100%";
+        t.inputEl.addClass("easy-git-fullwidth-input");
         t.setValue(this.plugin.settings.excludedPaths.join("\n"))
           .onChange(async (v) => {
             this.plugin.settings.excludedPaths = v

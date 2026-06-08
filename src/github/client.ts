@@ -127,7 +127,7 @@ export class GitHubClient {
     }
     const errMessage =
       (parsedBody && typeof parsedBody === "object" && "message" in parsedBody
-        ? String((parsedBody as { message: unknown }).message)
+        ? String(parsedBody.message)
         : `HTTP ${response.status}`) +
       ` (${method} ${url})`;
     throw new GitHubApiError({

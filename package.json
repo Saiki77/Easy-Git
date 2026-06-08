@@ -1,11 +1,12 @@
 {
   "name": "easy-git",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "A secure, plug-and-play way to sync individual vault folders or sections with GitHub.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "lint": "eslint \"src/**/*.ts\"",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [
@@ -20,8 +21,11 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.24.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.3.0",
     "obsidian": "latest",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.60.1"
   },
   "dependencies": {
     "node-diff3": "^3.2.0"

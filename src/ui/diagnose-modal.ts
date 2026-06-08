@@ -956,26 +956,9 @@ export class DiagnoseModal extends Modal {
   }
 
   private async copyToClipboard(text: string): Promise<void> {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
-        return;
-      }
-    } catch {
-      /* fall through to textarea fallback */
-    }
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand("copy");
-    } catch {
-      /* best effort */
-    }
-    document.body.removeChild(ta);
+    // Obsidian runs on Electron where the async Clipboard API is always
+    // available, so no legacy execCommand fallback is needed.
+    await navigator.clipboard.writeText(text);
   }
 
   onClose(): void {

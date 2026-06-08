@@ -114,6 +114,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   defaultCommitTemplate:
     "Sync from Obsidian ({mapping}): {datetime} — {added}+ {modified}~ {deleted}-",
   excludedPaths: [
+    // Sensible default; the actual (possibly custom) config dir is added at
+    // runtime by healSettings() via app.vault.configDir.
+    // eslint-disable-next-line obsidianmd/hardcoded-config-path
     ".obsidian/**",
     ".trash/**",
     ".git/**",

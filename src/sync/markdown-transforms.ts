@@ -512,10 +512,6 @@ export function splitByMathRegions(text: string): MathRegion[] {
   const out: MathRegion[] = [];
   let i = 0;
   let buf = "";
-  let bufKind: "prose" = "prose";
-  // We don't enter "math" mode via the buffer pattern below; instead
-  // we flush prose when math starts and append the whole math token.
-  void bufKind;
 
   const flushProse = () => {
     if (buf.length === 0) return;

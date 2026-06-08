@@ -82,7 +82,7 @@ export class DeviceFlowModal extends Modal {
         b
           .setButtonText("Copy code")
           .onClick(() => {
-            navigator.clipboard.writeText(resp.user_code);
+            void navigator.clipboard.writeText(resp.user_code);
             new Notice("Code copied to clipboard.");
           }),
       )
@@ -178,5 +178,5 @@ export class DeviceFlowModal extends Modal {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((res) => setTimeout(res, ms));
+  return new Promise((res) => window.setTimeout(res, ms));
 }

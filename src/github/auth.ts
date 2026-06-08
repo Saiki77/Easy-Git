@@ -52,7 +52,10 @@ export async function startDeviceFlow(
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Device flow start failed: HTTP ${response.status} ${response.text}`);
   }
-  const data = JSON.parse(response.text);
+  const data = JSON.parse(response.text) as DeviceCodeResponse & {
+    error?: string;
+    error_description?: string;
+  };
   if (data.error) {
     throw new Error(`Device flow start failed: ${data.error_description ?? data.error}`);
   }
@@ -80,7 +83,7 @@ export async function pollDeviceToken(
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Token poll HTTP ${response.status}: ${response.text}`);
   }
-  return JSON.parse(response.text);
+  return JSON.parse(response.text) as DeviceTokenResponse;
 }
 
 export function describeAuth(auth: GitHubAuth): string {
