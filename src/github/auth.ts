@@ -7,15 +7,31 @@ export interface UserInfo {
   scopes?: string[];
 }
 
-export async function validatePat(token: string): Promise<UserInfo> {
-  const client = new GitHubClient({ token });
+export async function validatePat(token: string, baseUrl?: string): Promise<UserInfo> {
+  const client = new GitHubClient({ token, baseUrl });
   const user = await client.request<{ login: string }>("GET", "/user");
   return { login: user.login };
 }
 
 export async function getAuthenticatedUser(client: GitHubClient): Promise<UserInfo> {
-  const user = await client.request<{ login: string }>("GET", "/user");
-  return { login: user.login };
+  try {
+    const user = await client.request<{ login: string }>("GET", "/user");
+    return { login: user.login };
+  } catch (e) {
+    // Self-hosted Forgejo/Gitea tokens scoped to specific repositories cannot
+    // have user-level (read:user) permission, so /user returns 403. Fall back
+    // to a repo-scoped endpoint so the connection test still confirms the token
+    // works for sync operations. GitHub's /user works for any valid token, so a
+    // 403 there is a genuine error (missing scope, SSO, or rate limit) and must
+    // propagate unchanged; the Forgejo-only fallback never runs against GitHub.
+    if (e instanceof GitHubApiError && e.status === 403 && !client.isGitHub()) {
+      // /user/repos also requires read:user on Forgejo; use /repos/search
+      // instead which only needs read:repository.
+      await client.request("GET", "/repos/search?limit=1");
+      return { login: "" };
+    }
+    throw e;
+  }
 }
 
 export interface DeviceCodeResponse {
@@ -102,7 +118,7 @@ export function describeAuthError(e: unknown): string {
         const reset = e.rateLimitReset ? new Date(e.rateLimitReset * 1000) : null;
         return `Rate limited${reset ? ` until ${reset.toLocaleTimeString()}` : ""}.`;
       }
-      return "Forbidden. Token may lack required `repo` scope.";
+      return "Forbidden. Check that the token has repository read/write access.";
     }
     if (e.status === 404) return "Not found. Check repo name and your access.";
     return e.message;

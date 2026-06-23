@@ -61,6 +61,40 @@ export async function listUserRepos(client: GitHubClient): Promise<RepoSummary[]
   }));
 }
 
+/** List repos via Forgejo/Gitea's /repos/search endpoint, which only
+ * requires read:repository scope (unlike /user/repos which needs read:user). */
+export async function listForgejoRepos(client: GitHubClient): Promise<RepoSummary[]> {
+  type Item = {
+    name: string;
+    full_name: string;
+    private: boolean;
+    default_branch: string;
+    updated_at: string;
+    owner: { login: string };
+  };
+  const out: RepoSummary[] = [];
+  const perPage = 50;
+  for (let page = 1; page <= 5; page++) {
+    const res = await client.request<{ ok: boolean; data: Item[] }>(
+      "GET",
+      `/repos/search?sort=updated&limit=${perPage}&page=${page}`,
+    );
+    if (!res.ok || !Array.isArray(res.data) || res.data.length === 0) break;
+    for (const r of res.data) {
+      out.push({
+        owner: r.owner.login,
+        name: r.name,
+        fullName: r.full_name,
+        private: r.private,
+        defaultBranch: r.default_branch,
+        updatedAt: r.updated_at,
+      });
+    }
+    if (res.data.length < perPage) break;
+  }
+  return out;
+}
+
 export async function getRepo(
   client: GitHubClient,
   owner: string,
@@ -87,12 +121,16 @@ export async function listBranches(
   owner: string,
   repo: string,
 ): Promise<BranchSummary[]> {
-  type Item = { name: string; commit: { sha: string } };
+  // GitHub returns commit.sha; Forgejo's branch commit is flat (commit.id).
+  type Item = { name: string; commit: { sha?: string; id?: string } };
   const items = await client.paginate<Item>(
     `/repos/${owner}/${repo}/branches`,
     { perPage: 100, maxPages: 3 },
   );
-  return items.map((b) => ({ name: b.name, commitSha: b.commit.sha }));
+  return items.map((b) => ({
+    name: b.name,
+    commitSha: b.commit.sha ?? b.commit.id ?? "",
+  }));
 }
 
 export async function getBranchHead(
@@ -102,12 +140,31 @@ export async function getBranchHead(
   branch: string,
 ): Promise<BranchHead> {
   const data = await client.request<{
-    commit: { sha: string; commit: { tree: { sha: string } } };
+    // GitHub: commit.sha + nested commit.commit.tree.sha
+    // Forgejo: commit.id (flat, no nested commit object)
+    commit: { sha?: string; id?: string; commit?: { tree: { sha: string } } };
   }>("GET", `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`);
-  return {
-    commitSha: data.commit.sha,
-    treeSha: data.commit.commit.tree.sha,
-  };
+
+  const commitSha = data.commit.sha ?? data.commit.id ?? "";
+
+  // GitHub includes the tree SHA in the branch response; use it directly.
+  if (data.commit.commit?.tree?.sha) {
+    return { commitSha, treeSha: data.commit.commit.tree.sha };
+  }
+
+  // Forgejo omits the tree SHA from the branch response — fetch the git
+  // commit object to get it.
+  // GitHub: { tree: { sha } } at top level
+  // Forgejo: { commit: { tree: { sha } } } nested under commit
+  const gitCommit = await client.request<{
+    tree?: { sha: string };
+    commit?: { tree: { sha: string } };
+  }>(
+    "GET",
+    `/repos/${owner}/${repo}/git/commits/${commitSha}`,
+  );
+  const treeSha = gitCommit.tree?.sha ?? gitCommit.commit?.tree?.sha ?? "";
+  return { commitSha, treeSha };
 }
 
 export async function getTreeRecursive(
@@ -129,11 +186,32 @@ export async function getTreeShallow(
   repo: string,
   treeSha: string,
 ): Promise<TreeEntry[]> {
-  const data = await client.request<{ tree: TreeEntry[] }>(
-    "GET",
-    `/repos/${owner}/${repo}/git/trees/${treeSha}`,
-  );
-  return data.tree ?? [];
+  // GitHub's git/trees endpoint is not paginated: a single call returns the
+  // whole (non-recursive) tree, so keep the request byte-identical there.
+  if (client.isGitHub()) {
+    const data = await client.request<{ tree: TreeEntry[] }>(
+      "GET",
+      `/repos/${owner}/${repo}/git/trees/${treeSha}`,
+    );
+    return data.tree ?? [];
+  }
+  // Gitea/Forgejo paginates git/trees at DefaultGitTreesPerPage (default 1000)
+  // and sets `truncated` when more pages exist. Page through, or a directory
+  // with more than 1000 entries would silently lose the overflow. The page cap
+  // is a safety stop; 100 pages is 100k entries, far beyond any real folder.
+  const perPage = 1000;
+  const maxPages = 100;
+  const entries: TreeEntry[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await client.request<{ tree: TreeEntry[]; truncated?: boolean }>(
+      "GET",
+      `/repos/${owner}/${repo}/git/trees/${treeSha}?per_page=${perPage}&page=${page}`,
+    );
+    const batch = data.tree ?? [];
+    entries.push(...batch);
+    if (!data.truncated || batch.length < perPage) break;
+  }
+  return entries;
 }
 
 /**
@@ -297,10 +375,26 @@ export async function getBlobContent(
   repo: string,
   sha: string,
 ): Promise<BlobContent> {
-  return client.request<BlobContent>(
-    "GET",
-    `/repos/${owner}/${repo}/git/blobs/${sha}`,
-  );
+  const blob = await client.request<{
+    sha: string;
+    size: number;
+    encoding: string | null;
+    content: string | null;
+  }>("GET", `/repos/${owner}/${repo}/git/blobs/${sha}`);
+  // Gitea/Forgejo returns null content (not an error) for blobs larger than its
+  // DefaultMaxBlobSize (default 10 MiB). Fail with a clear message instead of
+  // letting the null reach the base64 decoder as a cryptic TypeError.
+  if (blob.content == null) {
+    throw new Error(
+      `Remote file is too large to pull (${blob.size} bytes); the server returned no contents.`,
+    );
+  }
+  return {
+    sha: blob.sha,
+    size: blob.size,
+    encoding: blob.encoding ?? "base64",
+    content: blob.content,
+  };
 }
 
 export async function createBlob(
@@ -352,6 +446,53 @@ export async function createCommit(
  * Updates the branch ref. Returns true on success, false if the update was
  * rejected as a non-fast-forward (HTTP 422). Re-throws other errors.
  */
+/**
+ * Create or update a single file via the contents API.
+ * Used for Forgejo, which does not implement POST /git/blobs.
+ * Each call produces one commit. Pass existingSha for updates; omit for creates.
+ */
+export async function putFileContents(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  filePath: string,
+  base64Content: string,
+  commitMessage: string,
+  branch: string,
+  existingSha?: string,
+): Promise<{ commitSha: string; fileSha: string }> {
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  const body: Record<string, string> = { message: commitMessage, content: base64Content, branch };
+  if (existingSha) body.sha = existingSha;
+  // Forgejo: POST = create (no SHA), PUT = update (SHA required).
+  // GitHub uses PUT for both, but putFileContents is only called for Forgejo.
+  const method = existingSha ? "PUT" : "POST";
+  const data = await client.request<{
+    commit: { sha: string };
+    content: { sha: string };
+  }>(method, `/repos/${owner}/${repo}/contents/${encodedPath}`, body);
+  return { commitSha: data.commit.sha, fileSha: data.content.sha };
+}
+
+/** Delete a single file via the contents API. Returns the new commit SHA. */
+export async function deleteFileContents(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  filePath: string,
+  commitMessage: string,
+  branch: string,
+  existingSha: string,
+): Promise<string> {
+  const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+  const data = await client.request<{ commit: { sha: string } }>(
+    "DELETE",
+    `/repos/${owner}/${repo}/contents/${encodedPath}`,
+    { message: commitMessage, sha: existingSha, branch },
+  );
+  return data.commit.sha;
+}
+
 export async function updateRef(
   client: GitHubClient,
   owner: string,

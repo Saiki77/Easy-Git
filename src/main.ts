@@ -311,12 +311,16 @@ export default class EasyGitPlugin extends Plugin {
 
     // --- Auth state ---
     if (!s.auth || typeof s.auth !== "object") {
-      s.auth = { method: "none", token: "" };
+      s.auth = { method: "none", token: "", provider: "github" };
       dirty = true;
     }
     if (s.auth.method !== "none" && !s.auth.token) {
-      // Half-cleared state — treat as signed out.
-      s.auth = { method: "none", token: "" };
+      // Half-cleared state — treat as signed out, but keep provider/instanceUrl.
+      s.auth = { method: "none", token: "", provider: s.auth.provider, instanceUrl: s.auth.instanceUrl };
+      dirty = true;
+    }
+    if (!s.auth.provider || (s.auth.provider !== "github" && s.auth.provider !== "forgejo")) {
+      s.auth.provider = "github";
       dirty = true;
     }
 
@@ -342,6 +346,7 @@ export default class EasyGitPlugin extends Plugin {
     // --- Excluded paths: keep user entries; ensure the safety set is in. ---
     const safeExcludes = [
       ".easy-git-backup/**",
+      ".claude/**",
       ".DS_Store",
       ".trash/**",
       // Use the vault's actual config dir (the user may have changed it from

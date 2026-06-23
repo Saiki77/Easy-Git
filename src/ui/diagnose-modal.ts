@@ -11,6 +11,7 @@ import {
   PluginSettings,
   RemoteFileEntry,
   SyncLogEntry,
+  resolveApiBase,
 } from "../types";
 import { isExcluded } from "../sync/exclusion";
 
@@ -169,10 +170,10 @@ export class DiagnoseModal extends Modal {
     };
     let client: GitHubClient | null = null;
     if (settings.auth.method !== "none" && settings.auth.token) {
-      client = new GitHubClient({ token: settings.auth.token });
+      client = new GitHubClient({ token: settings.auth.token, baseUrl: resolveApiBase(settings.auth) });
       try {
         const user = await getAuthenticatedUser(client);
-        auth.username = user.login;
+        auth.username = user.login || undefined;
       } catch (e) {
         auth.tokenError = describeAuthError(e);
         fetchErrors.push("Auth check failed: " + auth.tokenError);
