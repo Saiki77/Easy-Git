@@ -60,6 +60,16 @@ export interface GitHubAuth {
   token: string;
   username?: string;
   scopes?: string[];
+  provider?: "github" | "forgejo";
+  /** Base URL of a self-hosted instance, e.g. "http://192.168.1.1:3000". Forgejo only. */
+  instanceUrl?: string;
+}
+
+export function resolveApiBase(auth: GitHubAuth): string {
+  if (auth.provider === "forgejo" && auth.instanceUrl) {
+    return auth.instanceUrl.replace(/\/+$/, "") + "/api/v1";
+  }
+  return GITHUB_API_BASE;
 }
 
 export interface SyncLogEntry {
@@ -109,7 +119,7 @@ export interface PluginSettings {
 export const SYNC_LOG_MAX = 100;
 
 export const DEFAULT_SETTINGS: PluginSettings = {
-  auth: { method: "none", token: "" },
+  auth: { method: "none", token: "", provider: "github" },
   mappings: [],
   defaultCommitTemplate:
     "Sync from Obsidian ({mapping}): {datetime} — {added}+ {modified}~ {deleted}-",
@@ -121,6 +131,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     ".git/**",
     "node_modules/**",
     ".easy-git-backup/**",
+    ".claude/**",
     ".DS_Store",
     "Thumbs.db",
     "*.tmp",
