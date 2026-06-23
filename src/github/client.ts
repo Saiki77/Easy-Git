@@ -56,6 +56,11 @@ export class GitHubClient {
     return this.token.length > 0;
   }
 
+  /** True when this client talks to github.com (not a self-hosted instance). */
+  isGitHub(): boolean {
+    return this.baseUrl === GITHUB_API_BASE;
+  }
+
   async request<T = unknown>(
     method: string,
     pathOrUrl: string,

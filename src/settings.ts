@@ -11,7 +11,7 @@ import {
   describeAuthError,
   getAuthenticatedUser,
 } from "./github/auth";
-import { resolveApiBase } from "./types";
+import { authConfigError, resolveApiBase } from "./types";
 
 interface MappingRowRefs {
   syncBtn: HTMLButtonElement;
@@ -169,7 +169,9 @@ export class EasyGitSettingTab extends PluginSettingTab {
           .setValue(auth.provider ?? "github")
           .onChange(async (v) => {
             this.plugin.settings.auth.provider = v as "github" | "forgejo";
-            if (v === "github") this.plugin.settings.auth.instanceUrl = undefined;
+            // Keep instanceUrl stored when switching to GitHub: resolveApiBase
+            // ignores it unless provider is "forgejo", and retaining it means
+            // toggling back to Forgejo restores the previously entered URL.
             await this.plugin.saveSettings();
             this.render();
           }),
@@ -249,6 +251,11 @@ export class EasyGitSettingTab extends PluginSettingTab {
         b.setButtonText("Test").onClick(async () => {
           if (!this.plugin.settings.auth.token) {
             new Notice("Easy Git: no token configured.");
+            return;
+          }
+          const cfgError = authConfigError(this.plugin.settings.auth);
+          if (cfgError) {
+            new Notice("Easy Git: " + cfgError);
             return;
           }
           try {

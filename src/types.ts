@@ -72,6 +72,24 @@ export function resolveApiBase(auth: GitHubAuth): string {
   return GITHUB_API_BASE;
 }
 
+/**
+ * Returns a user-facing error string if the auth config cannot be used to
+ * reach an API, or null if it is usable. Forgejo requires an instance URL.
+ * Without it, resolveApiBase() falls back to GITHUB_API_BASE and the token
+ * would be sent to github.com, so callers must guard before connecting.
+ */
+export function authConfigError(auth: GitHubAuth): string | null {
+  if (auth.provider === "forgejo") {
+    if (!auth.instanceUrl) {
+      return "Set the Instance URL for your Forgejo/Gitea server in settings.";
+    }
+    if (!/^https?:\/\//i.test(auth.instanceUrl)) {
+      return "The Forgejo/Gitea Instance URL must start with http:// or https://.";
+    }
+  }
+  return null;
+}
+
 export interface SyncLogEntry {
   /** Epoch ms when the sync run finished. */
   timestamp: number;
