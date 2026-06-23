@@ -18,10 +18,13 @@ export async function getAuthenticatedUser(client: GitHubClient): Promise<UserIn
     const user = await client.request<{ login: string }>("GET", "/user");
     return { login: user.login };
   } catch (e) {
-    // Forgejo tokens scoped to specific repositories cannot have user-level
-    // permissions. Fall back to a repo-scoped endpoint so the connection test
-    // still confirms the token works for sync operations.
-    if (e instanceof GitHubApiError && e.status === 403) {
+    // Self-hosted Forgejo/Gitea tokens scoped to specific repositories cannot
+    // have user-level (read:user) permission, so /user returns 403. Fall back
+    // to a repo-scoped endpoint so the connection test still confirms the token
+    // works for sync operations. GitHub's /user works for any valid token, so a
+    // 403 there is a genuine error (missing scope, SSO, or rate limit) and must
+    // propagate unchanged; the Forgejo-only fallback never runs against GitHub.
+    if (e instanceof GitHubApiError && e.status === 403 && !client.isGitHub()) {
       // /user/repos also requires read:user on Forgejo; use /repos/search
       // instead which only needs read:repository.
       await client.request("GET", "/repos/search?limit=1");

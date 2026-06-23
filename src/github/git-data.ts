@@ -121,12 +121,16 @@ export async function listBranches(
   owner: string,
   repo: string,
 ): Promise<BranchSummary[]> {
-  type Item = { name: string; commit: { sha: string } };
+  // GitHub returns commit.sha; Forgejo's branch commit is flat (commit.id).
+  type Item = { name: string; commit: { sha?: string; id?: string } };
   const items = await client.paginate<Item>(
     `/repos/${owner}/${repo}/branches`,
     { perPage: 100, maxPages: 3 },
   );
-  return items.map((b) => ({ name: b.name, commitSha: b.commit.sha }));
+  return items.map((b) => ({
+    name: b.name,
+    commitSha: b.commit.sha ?? b.commit.id ?? "",
+  }));
 }
 
 export async function getBranchHead(
@@ -182,11 +186,32 @@ export async function getTreeShallow(
   repo: string,
   treeSha: string,
 ): Promise<TreeEntry[]> {
-  const data = await client.request<{ tree: TreeEntry[] }>(
-    "GET",
-    `/repos/${owner}/${repo}/git/trees/${treeSha}`,
-  );
-  return data.tree ?? [];
+  // GitHub's git/trees endpoint is not paginated: a single call returns the
+  // whole (non-recursive) tree, so keep the request byte-identical there.
+  if (client.isGitHub()) {
+    const data = await client.request<{ tree: TreeEntry[] }>(
+      "GET",
+      `/repos/${owner}/${repo}/git/trees/${treeSha}`,
+    );
+    return data.tree ?? [];
+  }
+  // Gitea/Forgejo paginates git/trees at DefaultGitTreesPerPage (default 1000)
+  // and sets `truncated` when more pages exist. Page through, or a directory
+  // with more than 1000 entries would silently lose the overflow. The page cap
+  // is a safety stop; 100 pages is 100k entries, far beyond any real folder.
+  const perPage = 1000;
+  const maxPages = 100;
+  const entries: TreeEntry[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await client.request<{ tree: TreeEntry[]; truncated?: boolean }>(
+      "GET",
+      `/repos/${owner}/${repo}/git/trees/${treeSha}?per_page=${perPage}&page=${page}`,
+    );
+    const batch = data.tree ?? [];
+    entries.push(...batch);
+    if (!data.truncated || batch.length < perPage) break;
+  }
+  return entries;
 }
 
 /**
@@ -350,10 +375,26 @@ export async function getBlobContent(
   repo: string,
   sha: string,
 ): Promise<BlobContent> {
-  return client.request<BlobContent>(
-    "GET",
-    `/repos/${owner}/${repo}/git/blobs/${sha}`,
-  );
+  const blob = await client.request<{
+    sha: string;
+    size: number;
+    encoding: string | null;
+    content: string | null;
+  }>("GET", `/repos/${owner}/${repo}/git/blobs/${sha}`);
+  // Gitea/Forgejo returns null content (not an error) for blobs larger than its
+  // DefaultMaxBlobSize (default 10 MiB). Fail with a clear message instead of
+  // letting the null reach the base64 decoder as a cryptic TypeError.
+  if (blob.content == null) {
+    throw new Error(
+      `Remote file is too large to pull (${blob.size} bytes); the server returned no contents.`,
+    );
+  }
+  return {
+    sha: blob.sha,
+    size: blob.size,
+    encoding: blob.encoding ?? "base64",
+    content: blob.content,
+  };
 }
 
 export async function createBlob(
