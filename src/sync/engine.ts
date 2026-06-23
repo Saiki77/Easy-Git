@@ -10,6 +10,7 @@ import {
   PluginSettings,
   RemoteFileEntry,
   SyncResult,
+  resolveApiBase,
 } from "../types";
 import { GitHubClient, GitHubApiError } from "../github/client";
 import {
@@ -17,9 +18,11 @@ import {
   createBlob,
   createCommit,
   createTree,
+  deleteFileContents,
   getBlobContent,
   getBranchHead,
   listRemoteFolderFiles,
+  putFileContents,
   updateRef,
 } from "../github/git-data";
 import {
@@ -118,12 +121,12 @@ export class SyncEngine {
 
     const auth = this.deps.settings.auth;
     if (auth.method === "none" || !auth.token) {
-      result.error = "Not signed in. Configure GitHub auth in settings.";
+      result.error = "Not signed in. Configure auth in settings.";
       result.durationMs = Date.now() - start;
       return result;
     }
 
-    const client = new GitHubClient({ token: auth.token });
+    const client = new GitHubClient({ token: auth.token, baseUrl: resolveApiBase(auth) });
 
     let attempt = 0;
     while (attempt < MAX_NON_FF_RETRIES) {
@@ -402,20 +405,35 @@ export class SyncEngine {
 
     let newCommitSha: string | undefined;
     if (pushActions.length > 0) {
-      const commitResult = await this.buildAndPushCommit(
-        client,
-        mapping,
-        destination,
-        head.commitSha,
-        head.treeSha,
-        pushActions,
-        localScan.files,
-      );
-      if (commitResult === null) {
-        // Non-fast-forward: someone pushed during our run.
-        return "retry";
+      if (this.deps.settings.auth.provider === "forgejo") {
+        // Forgejo does not implement the Git Data write API (POST /git/blobs,
+        // /git/trees, /git/commits, PATCH /git/refs). Use the contents API
+        // instead — one commit per changed file.
+        const sha = await this.pushViaContentsApi(
+          client,
+          mapping,
+          destination,
+          pushActions,
+          localScan.files,
+          remote,
+        );
+        newCommitSha = sha || undefined;
+      } else {
+        const commitResult = await this.buildAndPushCommit(
+          client,
+          mapping,
+          destination,
+          head.commitSha,
+          head.treeSha,
+          pushActions,
+          localScan.files,
+        );
+        if (commitResult === null) {
+          // Non-fast-forward: someone pushed during our run.
+          return "retry";
+        }
+        newCommitSha = commitResult;
       }
-      newCommitSha = commitResult;
     }
 
     // 9. Persist new last-sync state on the destination.
@@ -1101,6 +1119,59 @@ export class SyncEngine {
     if (!file) return;
     await ensureVaultFolder(this.deps.app, parentOf(toPath));
     await this.deps.app.fileManager.renameFile(file, toPath);
+  }
+
+  /**
+   * Push files to Forgejo via the contents API (PUT/DELETE /contents/{path}).
+   * Used instead of buildAndPushCommit because Forgejo does not implement the
+   * Git Data write endpoints. Produces one commit per changed file.
+   * Returns the SHA of the last commit created, or "" if no actions ran.
+   */
+  private async pushViaContentsApi(
+    client: GitHubClient,
+    mapping: FolderMapping,
+    destination: MappingDestination,
+    pushActions: FileAction[],
+    localFiles: Record<string, LocalFileEntry>,
+    remote: Record<string, RemoteFileEntry>,
+  ): Promise<string> {
+    let lastCommitSha = "";
+    const prefix = `[Easy Git] ${mapping.name}`;
+
+    for (const action of pushActions) {
+      const fullRepoPath = repoPathFor(destination, action.path);
+
+      if (action.op === "push-delete") {
+        const existingSha = remote[action.path]?.sha;
+        if (!existingSha) continue;
+        lastCommitSha = await deleteFileContents(
+          client,
+          destination.repoOwner,
+          destination.repoName,
+          fullRepoPath,
+          `${prefix}: delete ${action.path}`,
+          destination.branch,
+          existingSha,
+        );
+      } else {
+        const content = await this.readVaultFile(mapping, action.path);
+        const existingSha = action.op === "push-modify" ? remote[action.path]?.sha : undefined;
+        const opLabel = action.op === "push-add" ? "add" : "update";
+        const result = await putFileContents(
+          client,
+          destination.repoOwner,
+          destination.repoName,
+          fullRepoPath,
+          content.base64,
+          `${prefix}: ${opLabel} ${action.path}`,
+          destination.branch,
+          existingSha,
+        );
+        lastCommitSha = result.commitSha;
+      }
+    }
+
+    return lastCommitSha;
   }
 
   private async buildAndPushCommit(

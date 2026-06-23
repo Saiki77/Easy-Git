@@ -11,6 +11,7 @@ import {
   describeAuthError,
   getAuthenticatedUser,
 } from "./github/auth";
+import { resolveApiBase } from "./types";
 
 interface MappingRowRefs {
   syncBtn: HTMLButtonElement;
@@ -150,26 +151,59 @@ export class EasyGitSettingTab extends PluginSettingTab {
   }
 
   private renderAuthSection(parent: HTMLElement): void {
+    const auth = this.plugin.settings.auth;
+    const isGitHub = (auth.provider ?? "github") === "github";
+
     const status = parent.createDiv({
       attr: { style: "margin-bottom: 0.75rem; color: var(--text-muted);" },
-      text: describeAuth(this.plugin.settings.auth),
+      text: describeAuth(auth),
     });
+
+    new Setting(parent)
+      .setName("Provider")
+      .setDesc("Which Git hosting service to sync with.")
+      .addDropdown((d) =>
+        d
+          .addOption("github", "GitHub")
+          .addOption("forgejo", "Forgejo / Gitea (self-hosted)")
+          .setValue(auth.provider ?? "github")
+          .onChange(async (v) => {
+            this.plugin.settings.auth.provider = v as "github" | "forgejo";
+            if (v === "github") this.plugin.settings.auth.instanceUrl = undefined;
+            await this.plugin.saveSettings();
+            this.render();
+          }),
+      );
+
+    if (!isGitHub) {
+      new Setting(parent)
+        .setName("Instance URL")
+        .setDesc("Base URL of your Forgejo/Gitea server, e.g. http://192.168.1.100:3000")
+        .addText((t) =>
+          t
+            .setPlaceholder("http://...")
+            .setValue(auth.instanceUrl ?? "")
+            .onChange(async (v) => {
+              this.plugin.settings.auth.instanceUrl = v.trim() || undefined;
+              await this.plugin.saveSettings();
+            }),
+        );
+    }
 
     new Setting(parent)
       .setName("Personal access token")
       .setDesc(
-        "Paste a token with the `repo` scope. Create one at github.com/settings/tokens (fine-grained tokens with content read/write also work).",
+        isGitHub
+          ? "Paste a token with the `repo` scope. Create one at github.com/settings/tokens (fine-grained tokens with content read/write also work)."
+          : "Paste a token from your Forgejo instance (User settings → Applications → Access tokens). Needs repository read/write access.",
       )
       .addText((t) => {
         t.inputEl.type = "password";
-        t.setPlaceholder("ghp_...")
-          .setValue(
-            this.plugin.settings.auth.method === "pat"
-              ? this.plugin.settings.auth.token
-              : "",
-          )
+        t.setPlaceholder(isGitHub ? "ghp_..." : "Forgejo token")
+          .setValue(auth.method === "pat" ? auth.token : "")
           .onChange(async (v) => {
             this.plugin.settings.auth = {
+              ...this.plugin.settings.auth,
               method: v ? "pat" : "none",
               token: v,
               username: undefined,
@@ -179,31 +213,34 @@ export class EasyGitSettingTab extends PluginSettingTab {
           });
       });
 
-    new Setting(parent)
-      .setName("Sign in with GitHub (Device Flow)")
-      .setDesc(
-        "Open a one-time code in your browser. Easier than copying a PAT. Requires the plugin's OAuth App client_id to be configured.",
-      )
-      .addButton((b) =>
-        b
-          .setButtonText("Sign in")
-          .onClick(() => {
-            const modal = new DeviceFlowModal(this.app, {
-              onSuccess: async ({ token, scope }) => {
-                this.plugin.settings.auth = {
-                  method: "oauth",
-                  token,
-                  scopes: scope ? scope.split(",") : undefined,
-                };
-                await this.plugin.saveSettings();
-                status.setText(describeAuth(this.plugin.settings.auth));
-                new Notice("Easy Git: signed in with GitHub.");
-                this.render();
-              },
-            });
-            modal.open();
-          }),
-      );
+    if (isGitHub) {
+      new Setting(parent)
+        .setName("Sign in with GitHub (Device Flow)")
+        .setDesc(
+          "Open a one-time code in your browser. Easier than copying a PAT. Requires the plugin's OAuth App client_id to be configured.",
+        )
+        .addButton((b) =>
+          b
+            .setButtonText("Sign in")
+            .onClick(() => {
+              const modal = new DeviceFlowModal(this.app, {
+                onSuccess: async ({ token, scope }) => {
+                  this.plugin.settings.auth = {
+                    ...this.plugin.settings.auth,
+                    method: "oauth",
+                    token,
+                    scopes: scope ? scope.split(",") : undefined,
+                  };
+                  await this.plugin.saveSettings();
+                  status.setText(describeAuth(this.plugin.settings.auth));
+                  new Notice("Easy Git: signed in with GitHub.");
+                  this.render();
+                },
+              });
+              modal.open();
+            }),
+        );
+    }
 
     new Setting(parent)
       .setName("Test connection")
@@ -217,12 +254,17 @@ export class EasyGitSettingTab extends PluginSettingTab {
           try {
             const client = new GitHubClient({
               token: this.plugin.settings.auth.token,
+              baseUrl: resolveApiBase(this.plugin.settings.auth),
             });
             const user = await getAuthenticatedUser(client);
-            this.plugin.settings.auth.username = user.login;
+            this.plugin.settings.auth.username = user.login || undefined;
             await this.plugin.saveSettings();
             status.setText(describeAuth(this.plugin.settings.auth));
-            new Notice(`Easy Git: connected as ${user.login}.`);
+            new Notice(
+              user.login
+                ? `Easy Git: connected as ${user.login}.`
+                : "Easy Git: connected (token has repository access).",
+            );
           } catch (e) {
             new Notice("Easy Git: " + describeAuthError(e));
           }
@@ -236,7 +278,12 @@ export class EasyGitSettingTab extends PluginSettingTab {
         markButtonDestructive(b)
           .setButtonText("Clear")
           .onClick(async () => {
-            this.plugin.settings.auth = { method: "none", token: "" };
+            this.plugin.settings.auth = {
+              method: "none",
+              token: "",
+              provider: this.plugin.settings.auth.provider,
+              instanceUrl: this.plugin.settings.auth.instanceUrl,
+            };
             await this.plugin.saveSettings();
             status.setText(describeAuth(this.plugin.settings.auth));
             new Notice("Easy Git: credentials cleared.");

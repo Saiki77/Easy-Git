@@ -5,6 +5,7 @@ import {
   getRepo,
   getTreeRecursive,
   listBranches,
+  listForgejoRepos,
   listUserRepos,
 } from "../github/git-data";
 import { BranchSummary, RepoSummary } from "../types";
@@ -56,6 +57,7 @@ export class RepoSuggest extends FuzzySuggestModal<RepoSummary> {
     app: App,
     private client: GitHubClient,
     onChoose: (repo: RepoSummary) => void,
+    private provider?: string,
   ) {
     super(app);
     this.onChoose = onChoose;
@@ -64,7 +66,9 @@ export class RepoSuggest extends FuzzySuggestModal<RepoSummary> {
 
   async load(): Promise<void> {
     try {
-      this.repos = await listUserRepos(this.client);
+      this.repos = this.provider === "forgejo"
+        ? await listForgejoRepos(this.client)
+        : await listUserRepos(this.client);
       this.setPlaceholder("Choose a repository");
       this.inputEl?.dispatchEvent(new Event("input"));
     } catch (e) {

@@ -10,6 +10,7 @@ import {
   PluginSettings,
   SyncDirection,
   makeId,
+  resolveApiBase,
 } from "../types";
 import {
   BranchSuggest,
@@ -71,7 +72,7 @@ export class EditMappingModal extends Modal {
     this.vaultFolderPicked = !this.isNew;
     this.client =
       opts.auth.method !== "none" && opts.auth.token
-        ? new GitHubClient({ token: opts.auth.token })
+        ? new GitHubClient({ token: opts.auth.token, baseUrl: resolveApiBase(opts.auth) })
         : null;
   }
 
@@ -238,7 +239,7 @@ export class EditMappingModal extends Modal {
       cls: "easy-git-section-sub",
       text:
         n === 0
-          ? "Add at least one destination — a GitHub repo + branch + path to sync this folder to."
+          ? "Add at least one destination — a repo + branch + path to sync this folder to."
           : "One mapping can push to several places. Each destination tracks its own sync state.",
     });
   }
@@ -263,7 +264,7 @@ export class EditMappingModal extends Modal {
     repoBtn.addClass("easy-git-picker-button");
     repoBtn.onclick = () => {
       if (!this.client) {
-        new Notice("Please configure GitHub authentication first.");
+        new Notice("Please configure authentication first.");
         return;
       }
       const modal = new RepoSuggest(this.app, this.client, (repo) => {
@@ -273,7 +274,7 @@ export class EditMappingModal extends Modal {
         repoBtn.setText(repo.fullName);
         const refs = this.destRefs.get(dest.id);
         if (refs && dest.branch) refs.branchBtn.setText(dest.branch);
-      });
+      }, this.opts.auth.provider);
       modal.open();
       void modal.load();
     };
@@ -286,7 +287,7 @@ export class EditMappingModal extends Modal {
     branchBtn.addClass("easy-git-picker-button");
     branchBtn.onclick = () => {
       if (!this.client) {
-        new Notice("Please configure GitHub authentication first.");
+        new Notice("Please configure authentication first.");
         return;
       }
       if (!dest.repoOwner || !dest.repoName) {
@@ -322,7 +323,7 @@ export class EditMappingModal extends Modal {
     browseBtn.addClass("easy-git-picker-inline");
     browseBtn.onclick = () => {
       if (!this.client) {
-        new Notice("Please configure GitHub authentication first.");
+        new Notice("Please configure authentication first.");
         return;
       }
       if (!dest.repoOwner || !dest.repoName) {

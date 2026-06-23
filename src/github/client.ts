@@ -3,6 +3,7 @@ import { GITHUB_API_BASE } from "../types";
 
 export interface GitHubClientOptions {
   token: string;
+  baseUrl?: string;
   userAgent?: string;
 }
 
@@ -37,11 +38,13 @@ export interface RateLimitInfo {
 
 export class GitHubClient {
   private token: string;
+  private baseUrl: string;
   private userAgent: string;
   lastRateLimit?: RateLimitInfo;
 
   constructor(opts: GitHubClientOptions) {
     this.token = opts.token;
+    this.baseUrl = opts.baseUrl ?? GITHUB_API_BASE;
     this.userAgent = opts.userAgent ?? "Easy-Git-Obsidian-Plugin";
   }
 
@@ -61,14 +64,16 @@ export class GitHubClient {
   ): Promise<T> {
     const url = pathOrUrl.startsWith("http")
       ? pathOrUrl
-      : `${GITHUB_API_BASE}${pathOrUrl}`;
+      : `${this.baseUrl}${pathOrUrl}`;
 
     const headers: Record<string, string> = {
       Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": this.userAgent,
       ...(extraHeaders ?? {}),
     };
+    if (this.baseUrl === GITHUB_API_BASE) {
+      headers["X-GitHub-Api-Version"] = "2022-11-28";
+    }
     // Bypass any HTTP-layer caching (Electron net stack honours
     // Cache-Control / ETag headers GitHub sets on read endpoints — without
     // this, the branch/tree endpoints can return stale data after a remote
