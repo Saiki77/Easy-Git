@@ -22,6 +22,17 @@
 
 Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where you want to share only one or two folders with a repo: a notes folder you keep public, course material you collaborate on, a snippets section you want backed up under version control. You pick the folder, you pick the repo, you pick the direction. That's it.
 
+## Sync providers
+
+Easy Git started life as a GitHub plugin and now also syncs to self-hosted **Forgejo / Gitea** instances. Pick the provider under **Settings → Easy Git → Authentication**; everything else (mappings, directions, conflict handling, backups, the markdown transforms) works the same no matter where your repos live.
+
+Whatever the provider, Easy Git holds to the same simple spirit:
+
+1. **Connecting your account takes seconds.** Paste a token (or sign in), press **Test connection**, done. No CLI, no SSH keys, no per-repo setup.
+2. **Linking an individual folder is just as easy.** Pick a vault folder, pick a repo, branch, and path, pick a direction. Nothing about the underlying provider shows up in that flow.
+
+If you'd like Easy Git to reach another host such as GitLab, Bitbucket, or a different self-hosted server, that's very welcome as long as it keeps both of those true. The extension points are documented in [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-sync-provider).
+
 ## Install
 
 **From inside Obsidian** (recommended)
@@ -273,7 +284,7 @@ All three conflict layers (mtime auto-resolve, 3-way merge, the modal) and the b
 ## Permissions
 
 - **Clipboard**: written to only by the **Sign in with GitHub** button, which copies the one-time device code so you can paste it on github.com. No clipboard reads anywhere.
-- **Network**: every HTTP call goes to `api.github.com` (and `github.com/login/...` for Device Flow). No third-party servers.
+- **Network**: with GitHub, every HTTP call goes to `api.github.com` (and `github.com/login/...` for Device Flow). With a self-hosted Forgejo/Gitea provider, calls go only to the Instance URL you configure. No third-party servers either way.
 - **Vault**: reads and writes only inside the folders you configure as mappings, minus your exclusion globs.
 
 ## Build from source
