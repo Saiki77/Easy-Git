@@ -272,6 +272,22 @@ export class SyncEngine {
     const lastState: Record<string, FileSyncRecord> =
       destination.lastSyncState?.files ?? {};
 
+    // Drop remote paths that match this mapping's exclude list. An excluded
+    // file can still exist on the remote (e.g. a .obsidian/app.json that landed
+    // there before the exclusion was added). Without this it is classified as
+    // pull-add and the engine tries to create it locally, which fails with
+    // "File already exists" because config-dir / dotfiles are not vault files
+    // the create-fallback can find. Mirrors the local scan's exclude check, so
+    // an excluded path is invisible on both sides.
+    for (const rp of Object.keys(remote)) {
+      if (
+        isExcluded(rp, localScan.excludePatterns) ||
+        isExcluded(vaultPathFor(mapping, rp), localScan.excludePatterns)
+      ) {
+        delete remote[rp];
+      }
+    }
+
     // 4.5. Multi-source pull noise filter: when the mapping is pull-only and
     // has more than one destination, the vault folder is a shared sink for
     // several upstreams. Files owned by sibling destinations would otherwise
@@ -513,6 +529,7 @@ export class SyncEngine {
     calloutsRewritten: number;
     highlightsRewritten: number;
     mathMacrosRewritten: number;
+    excludePatterns: string[];
   }> {
     const isWholeVault = isVaultRoot(mapping.vaultFolder);
     let folder: TFolder | null;
@@ -678,6 +695,7 @@ export class SyncEngine {
       calloutsRewritten,
       highlightsRewritten,
       mathMacrosRewritten,
+      excludePatterns,
     };
   }
 
