@@ -2,6 +2,8 @@ import { Plugin } from "obsidian";
 
 export interface StatusState {
   hasMappings: boolean;
+  /** True when every configured mapping is paused — nothing will sync. */
+  allPaused: boolean;
   anySyncing: boolean;
   anyErrored: boolean;
   /** Epoch ms of the most recent successful sync across all mappings. */
@@ -51,6 +53,10 @@ export class StatusBarIndicator {
     if (state.anySyncing) {
       this.el.addClass("is-syncing");
       this.el.setText("↻ Syncing…");
+      return;
+    }
+    if (state.allPaused) {
+      this.el.setText("⏸ Easy Git paused");
       return;
     }
     if (state.anyErrored) {

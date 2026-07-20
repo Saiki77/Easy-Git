@@ -65,6 +65,17 @@
   color: var(--text-accent);
 }
 
+.easy-git-mapping-status.is-paused {
+  color: var(--text-faint);
+}
+
+/* Paused mapping: dim everything except the toggle (which must stay
+ * obviously interactive so the user can un-pause). */
+.easy-git-mapping-row.is-paused .easy-git-mapping-info,
+.easy-git-mapping-row.is-paused .easy-git-direction-icon {
+  opacity: 0.55;
+}
+
 .easy-git-mapping-warning {
   margin-top: 0.3rem;
   font-size: 0.85em;

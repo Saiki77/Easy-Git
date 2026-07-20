@@ -205,7 +205,7 @@ export class RemoteFolderSuggest extends FuzzySuggestModal<string> {
   }
 }
 
-export class MappingNameSuggest<T extends { id: string; name: string }> extends FuzzySuggestModal<T> {
+export class MappingNameSuggest<T extends { id: string; name: string; paused?: boolean }> extends FuzzySuggestModal<T> {
   private items: T[];
   private onChoose: (item: T) => void;
 
@@ -221,7 +221,7 @@ export class MappingNameSuggest<T extends { id: string; name: string }> extends 
   }
 
   getItemText(item: T): string {
-    return item.name;
+    return item.paused ? `${item.name} (paused)` : item.name;
   }
 
   onChooseItem(item: T): void {

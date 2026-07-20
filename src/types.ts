@@ -51,6 +51,12 @@ export interface FolderMapping {
   /** Set to true the first time the engine has auto-enabled rewriteWikilinks
    * (so the migration Notice fires once, not on every sync). */
   rewriteWikilinksMigrated?: boolean;
+  /**
+   * Paused mappings never sync — auto-sync schedules are not wired, "Sync
+   * all" skips them, and explicit sync attempts are blocked with a Notice.
+   * Undefined (mappings saved before this field existed) means active.
+   */
+  paused?: boolean;
   /** One or more remote targets. v0.5+ schema. */
   destinations: MappingDestination[];
 }

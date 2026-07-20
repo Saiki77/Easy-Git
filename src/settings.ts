@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, ToggleComponent } from "obsidian";
 import type EasyGitPlugin from "./main";
 import { FolderMapping } from "./types";
 import { EditMappingModal } from "./ui/mapping-modal";
@@ -142,11 +142,17 @@ export class EasyGitSettingTab extends PluginSettingTab {
       if (!mapping) continue;
       const isSyncing = this.plugin.isSyncing(id);
       const anyErrored = (mapping.destinations ?? []).some((d) => !!d.lastSyncError);
-      refs.syncBtn.disabled = isSyncing;
+      const paused = !!mapping.paused;
+      // Mirror the initial-render conditions: a broken or paused mapping's
+      // Sync button must stay disabled when some other sync finishing
+      // triggers this refresh.
+      refs.syncBtn.disabled =
+        isSyncing || paused || !this.plugin.mappingHealth(mapping).ok;
       refs.syncBtn.setText(isSyncing ? "Syncing…" : "Sync");
       refs.statusEl.setText(statusText(mapping, isSyncing));
       refs.statusEl.toggleClass("is-syncing", isSyncing);
-      refs.statusEl.toggleClass("is-error", !isSyncing && anyErrored);
+      refs.statusEl.toggleClass("is-error", !isSyncing && !paused && anyErrored);
+      refs.statusEl.toggleClass("is-paused", !isSyncing && paused);
     }
   }
 
@@ -334,6 +340,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
 
   private renderMappingRow(parent: HTMLElement, mapping: FolderMapping): void {
     const row = parent.createDiv({ cls: "easy-git-mapping-row" });
+    if (mapping.paused) row.addClass("is-paused");
     const info = row.createDiv({ cls: "easy-git-mapping-info" });
     info.createDiv({ cls: "easy-git-mapping-name", text: mapping.name });
     info.createDiv({
@@ -347,6 +354,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
       text: statusText(mapping, isSyncing),
     });
     if (isSyncing) statusEl.addClass("is-syncing");
+    else if (mapping.paused) statusEl.addClass("is-paused");
     else if (anyErrored) statusEl.addClass("is-error");
 
     // Inline broken-state warning. mappingHealth() detects missing folder,
@@ -361,6 +369,25 @@ export class EasyGitSettingTab extends PluginSettingTab {
     }
 
     const actions = row.createDiv({ cls: "easy-git-mapping-actions" });
+
+    // On/off switch (issue #3): temporarily exclude a mapping from all
+    // syncing — auto schedules, Sync all, and manual runs — without
+    // deleting it. Off = paused.
+    const pauseToggle = new ToggleComponent(actions);
+    pauseToggle
+      .setValue(!mapping.paused)
+      .setTooltip(
+        mapping.paused
+          ? "Paused — turn on to resume syncing"
+          : "On — turn off to pause syncing for this mapping",
+      )
+      .onChange(async (on) => {
+        mapping.paused = on ? undefined : true;
+        await this.plugin.saveSettings();
+        this.plugin.refreshAutoSyncWiring();
+        this.render();
+      });
+
     actions.createSpan({
       cls: "easy-git-direction-icon",
       text: directionIcon(mapping.direction),
@@ -369,8 +396,10 @@ export class EasyGitSettingTab extends PluginSettingTab {
     const syncBtn = actions.createEl("button", {
       text: isSyncing ? "Syncing…" : "Sync",
     });
-    syncBtn.disabled = isSyncing || !health.ok;
-    if (!health.ok) {
+    syncBtn.disabled = isSyncing || !health.ok || !!mapping.paused;
+    if (mapping.paused) {
+      syncBtn.setAttr("title", "Mapping is paused. Turn it back on to sync.");
+    } else if (!health.ok) {
       syncBtn.setAttr("title", health.reason);
     }
     syncBtn.onclick = async () => {
@@ -653,6 +682,7 @@ function isVaultRootFolder(vaultFolder: string): boolean {
 
 function statusText(m: FolderMapping, isSyncing = false): string {
   if (isSyncing) return "Syncing…";
+  if (m.paused) return "Paused";
   const destinations = m.destinations ?? [];
 
   // Aggregate across destinations: any error → show one error; else the

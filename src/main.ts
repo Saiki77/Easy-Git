@@ -168,7 +168,9 @@ export default class EasyGitPlugin extends Plugin {
     let mostRecentSync: number | undefined;
     for (const m of mappings) {
       for (const d of m.destinations ?? []) {
-        if (d.lastSyncError) anyErrored = true;
+        // A paused mapping's stale error shouldn't keep the status bar red —
+        // pausing is the user saying "leave this one alone for now".
+        if (d.lastSyncError && !m.paused) anyErrored = true;
         if (d.lastSyncAt && (!mostRecentSync || d.lastSyncAt > mostRecentSync)) {
           mostRecentSync = d.lastSyncAt;
         }
@@ -176,6 +178,7 @@ export default class EasyGitPlugin extends Plugin {
     }
     return {
       hasMappings: mappings.length > 0,
+      allPaused: mappings.length > 0 && mappings.every((m) => m.paused),
       anySyncing,
       anyErrored,
       mostRecentSync,
@@ -399,6 +402,11 @@ export default class EasyGitPlugin extends Plugin {
         m.direction = "both";
         dirty = true;
       }
+      // Coerce a hand-edited paused flag to a real boolean.
+      if (m.paused !== undefined && typeof m.paused !== "boolean") {
+        m.paused = !!m.paused;
+        dirty = true;
+      }
       // Clamp autoMode shape.
       if (!m.autoMode || typeof m.autoMode !== "object") {
         m.autoMode = { kind: "off" };
@@ -510,6 +518,7 @@ export default class EasyGitPlugin extends Plugin {
     let needVaultListeners = false;
 
     for (const mapping of this.settings.mappings) {
+      if (mapping.paused) continue;
       const auto = mapping.autoMode;
       if (auto.kind === "interval") {
         const ms = Math.max(1, auto.minutes) * 60_000;
@@ -541,6 +550,7 @@ export default class EasyGitPlugin extends Plugin {
 
   private runStartupSyncs(): void {
     for (const mapping of this.settings.mappings) {
+      if (mapping.paused) continue;
       if (mapping.autoMode.kind === "startup") {
         void this.syncMapping(mapping.id, "startup");
       }
@@ -573,6 +583,7 @@ export default class EasyGitPlugin extends Plugin {
   private maybeFireOnSave(file: TAbstractFile): void {
     if (!(file instanceof TFile)) return;
     for (const mapping of this.settings.mappings) {
+      if (mapping.paused) continue;
       if (mapping.autoMode.kind !== "onSave") continue;
       if (!isPathInside(file.path, mapping.vaultFolder)) continue;
       const debouncer = this.onSaveDebouncers.get(mapping.id);
@@ -582,6 +593,7 @@ export default class EasyGitPlugin extends Plugin {
 
   async syncAll(trigger: SyncTrigger): Promise<void> {
     for (const m of this.settings.mappings) {
+      if (m.paused) continue;
       await this.syncMapping(m.id, trigger);
     }
   }
@@ -589,6 +601,17 @@ export default class EasyGitPlugin extends Plugin {
   async syncMapping(id: string, trigger: SyncTrigger): Promise<void> {
     const mapping = this.settings.mappings.find((m) => m.id === id);
     if (!mapping) return;
+    if (mapping.paused) {
+      // Central guard: automatic triggers can still fire in the window
+      // between pausing and re-wiring (queued debounce, in-flight interval)
+      // — drop those silently. Explicit user attempts get feedback.
+      if (trigger === "manual" || trigger === "command") {
+        new Notice(
+          `Easy Git: "${mapping.name}" is paused. Turn it back on in settings to sync.`,
+        );
+      }
+      return;
+    }
     if (this.syncing.has(id)) {
       this.pendingAfterSync.add(id);
       return;
@@ -843,8 +866,9 @@ export default class EasyGitPlugin extends Plugin {
       for (const m of this.settings.mappings) {
         menu.addItem((i) =>
           i
-            .setTitle(`Sync: ${m.name}`)
-            .setIcon(iconForDirection(m.direction))
+            .setTitle(m.paused ? `Sync: ${m.name} (paused)` : `Sync: ${m.name}`)
+            .setIcon(m.paused ? "pause" : iconForDirection(m.direction))
+            .setDisabled(!!m.paused)
             .onClick(() => void this.syncMapping(m.id, "manual")),
         );
       }

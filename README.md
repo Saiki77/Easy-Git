@@ -63,6 +63,10 @@ If you rename or move the mapping's folder inside Obsidian later, Easy Git updat
 
 After that, sync from the ribbon menu, the command palette (`Easy Git: Sync mapping…`), or the **Sync** button next to each mapping.
 
+### Pausing a mapping
+
+Every mapping row in settings has an on/off switch. Turn it off to pause the mapping: auto-sync schedules stop, **Sync all** skips it, and its Sync button is disabled — without losing the mapping's configuration or sync state. Turn it back on to resume exactly where it left off. Paused mappings show a dimmed row and a "Paused" status, and appear as "(paused)" in the ribbon menu and command-palette pickers.
+
 ## Multiple destinations per mapping
 
 A single mapping can push the same vault folder to (or pull it from) several places at once. The mapping's direction (push / pull / both) applies to every destination of that mapping.
@@ -251,7 +255,8 @@ A small indicator sits in Obsidian's bottom-right status bar showing the aggrega
 - `↻ Ready`: at least one mapping configured, nothing has synced yet
 - `↻ Synced 5m ago`: last successful sync (most recent across mappings)
 - `↻ Syncing…`: a sync is in progress
-- `! Easy Git error`: at least one mapping has an unresolved error
+- `⏸ Easy Git paused`: every mapping is paused, nothing will sync
+- `! Easy Git error`: at least one mapping has an unresolved error (paused mappings don't count)
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
 
