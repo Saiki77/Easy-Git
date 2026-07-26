@@ -1,11 +1,4 @@
-/* eslint-disable obsidianmd/no-unsupported-api --
- * This module is the guarded boundary for an API newer than minAppVersion
- * (1.11.4 vs 1.6.6). Every entry point below feature checks before touching
- * app.secretStorage and falls back to data.json when it is absent, which is
- * what the rule is asking for. The disable is deliberately file scoped so
- * the rule keeps firing on any unguarded use elsewhere in the plugin.
- */
-import { App, SecretStorage } from "obsidian";
+import { App } from "obsidian";
 
 /**
  * Secret IDs must be lowercase alphanumeric with optional dashes; anything
@@ -18,15 +11,28 @@ const TOKEN_SECRET_ID = "easy-git-token";
  * (macOS Keychain, Windows DPAPI, Linux secret service) instead of the
  * plugin's data.json.
  *
- * The typings declare it as always present, but manifest.minAppVersion is
- * 1.6.6, so at runtime it is undefined on older builds. Everything here
- * feature checks first and degrades to leaving the token in data.json.
+ * manifest.minAppVersion is 1.6.6, so the property simply does not exist on
+ * older builds. It is deliberately reached through a local structural type
+ * rather than Obsidian's own `App.secretStorage` declaration: the typings
+ * declare it as always present, which would let a plain member access
+ * type-check while throwing at runtime on every supported build below
+ * 1.11.4. Describing only the shape we use keeps the optionality honest and
+ * forces every caller through the feature check in secretStorage().
  *
  * The API has no delete method, only get/set/list, so clearing a secret
  * means storing an empty string.
  */
-function secretStorage(app: App): SecretStorage | null {
-  const store: SecretStorage | undefined = app.secretStorage;
+interface SecretStorageApi {
+  getSecret(id: string): string | null;
+  setSecret(id: string, secret: string): void;
+}
+
+interface AppWithSecretStorage {
+  secretStorage?: SecretStorageApi;
+}
+
+function secretStorage(app: App): SecretStorageApi | null {
+  const store = (app as unknown as AppWithSecretStorage).secretStorage;
   if (
     !store ||
     typeof store.getSecret !== "function" ||
@@ -42,14 +48,17 @@ export function secretStorageAvailable(app: App): boolean {
   return secretStorage(app) !== null;
 }
 
-/** The stored token, or null if there is none (or no secret storage). */
+/**
+ * The stored token, or null if there is none, the build is too old, or the
+ * keystore could not be read (a locked keychain, for instance). Callers
+ * treat all three the same way: fall back to whatever data.json holds.
+ */
 export function readStoredToken(app: App): string | null {
   const store = secretStorage(app);
   if (!store) return null;
   try {
     return store.getSecret(TOKEN_SECRET_ID) || null;
-  } catch (e) {
-    console.error("Easy Git: could not read the token from secret storage.", e);
+  } catch {
     return null;
   }
 }
@@ -65,8 +74,7 @@ export function writeStoredToken(app: App, token: string): boolean {
   try {
     store.setSecret(TOKEN_SECRET_ID, token);
     return true;
-  } catch (e) {
-    console.error("Easy Git: could not write the token to secret storage.", e);
+  } catch {
     return false;
   }
 }
