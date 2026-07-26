@@ -26,6 +26,12 @@ import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
 import { MappingNameSuggest } from "./ui/pickers";
 import { StatusBarIndicator, StatusState } from "./ui/status-bar";
+import {
+  clearStoredToken,
+  readStoredToken,
+  secretStorageAvailable,
+  writeStoredToken,
+} from "./secret-storage";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
@@ -68,7 +74,9 @@ export default class EasyGitPlugin extends Plugin {
     this.engine = new SyncEngine({
       app: this.app,
       settings: this.settings,
-      saveSettings: () => this.saveData(this.settings),
+      // Must go through saveSettings(), not saveData(), or the engine would
+      // write the token straight back into data.json after every sync.
+      saveSettings: () => this.saveSettings(),
       resolveConflicts: (mapping, destination, conflicts) =>
         this.openConflictModal(mapping, destination, conflicts),
     });
@@ -249,9 +257,56 @@ export default class EasyGitPlugin extends Plugin {
       (data as Partial<PluginSettings>) ?? {},
     );
     let dirty = false;
+    // Before healSettings(), which signs the user out when it sees a method
+    // without a token. The token is not in data.json anymore, so it has to be
+    // back in memory by then.
+    if (this.hydrateToken()) dirty = true;
     if (this.migrateLegacyMappings()) dirty = true;
     if (this.healSettings()) dirty = true;
     if (dirty) await this.saveSettings();
+  }
+
+  /**
+   * Resolve where the token physically lives and load it into memory.
+   *
+   * On Obsidian 1.11.4+ it belongs in the OS keystore, so a vault copied to
+   * another device, picked up by Obsidian Sync, committed by another git
+   * plugin, or read by any other community plugin carries no credential.
+   * Older builds keep it in data.json as before.
+   *
+   * The rest of the plugin keeps reading settings.auth.token either way, so
+   * this and persistableSettings() are the only places that know the
+   * difference. Returns true if data.json needs rewriting.
+   */
+  private hydrateToken(): boolean {
+    if (!secretStorageAvailable(this.app)) return false;
+    const plaintext = this.settings.auth.token;
+    if (plaintext) {
+      // A token written by an older version, or by a downgrade round-trip.
+      // Promote it and let the caller rewrite data.json without it. If the
+      // keystore write fails, leave data.json alone rather than lose it.
+      return writeStoredToken(this.app, plaintext);
+    }
+    const stored = readStoredToken(this.app);
+    if (stored) this.settings.auth.token = stored;
+    return false;
+  }
+
+  /**
+   * The settings object actually written to data.json. Strips the token when
+   * the keystore has it, so the credential exists in exactly one place.
+   */
+  private persistableSettings(): PluginSettings {
+    if (!secretStorageAvailable(this.app)) return this.settings;
+    const token = this.settings.auth.token;
+    if (!token) {
+      // Signed out. Drop the stored secret too, otherwise the next load would
+      // rehydrate the token the user just cleared.
+      clearStoredToken(this.app);
+      return this.settings;
+    }
+    if (!writeStoredToken(this.app, token)) return this.settings;
+    return { ...this.settings, auth: { ...this.settings.auth, token: "" } };
   }
 
   /**
@@ -505,7 +560,7 @@ export default class EasyGitPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await this.saveData(this.persistableSettings());
   }
 
   refreshAutoSyncWiring(): void {

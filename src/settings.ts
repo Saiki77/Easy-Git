@@ -12,6 +12,7 @@ import {
   getAuthenticatedUser,
 } from "./github/auth";
 import { authConfigError, resolveApiBase } from "./types";
+import { secretStorageAvailable } from "./secret-storage";
 
 interface MappingRowRefs {
   syncBtn: HTMLButtonElement;
@@ -163,6 +164,15 @@ export class EasyGitSettingTab extends PluginSettingTab {
     const status = parent.createDiv({
       attr: { style: "margin-bottom: 0.75rem; color: var(--text-muted);" },
       text: describeAuth(auth),
+    });
+
+    parent.createDiv({
+      attr: {
+        style: "margin-bottom: 0.75rem; color: var(--text-muted); font-size: var(--font-ui-smaller);",
+      },
+      text: secretStorageAvailable(this.app)
+        ? "Your token is kept in this device's system keychain, not in the plugin's settings file. It does not travel with the vault, so enter it once per device."
+        : "Your token is stored in this plugin's settings file inside the vault. Obsidian 1.11.4 or newer stores it in the system keychain instead.",
     });
 
     new Setting(parent)

@@ -55,6 +55,8 @@ Either works for private repos.
 - **Personal Access Token.** Create one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope (or a fine-grained token with `Contents: Read and write` + `Metadata: Read`), paste it in settings, hit **Test connection**.
 - **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically.
 
+**Where your token lives.** On Obsidian 1.11.4 and newer, Easy Git stores it in your operating system's keychain rather than in the plugin's settings file, so it never travels with the vault and other plugins can't read it. That also means it is per device: if you use the same vault on a laptop and a phone, sign in once on each. Older Obsidian builds keep the token in `data.json` as before. An existing token is moved into the keychain automatically the first time you run this version.
+
 ## Add a folder mapping
 
 Settings → Easy Git → **+ Add mapping**. Pick the vault folder (or the vault root for whole-vault sync), add one or more destinations (each = repo + branch + path inside the repo), the direction (push only, pull only, or both), and how often to sync (manual, on interval, on startup, or on save). Save.
