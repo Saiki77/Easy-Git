@@ -7,11 +7,25 @@ import { requestBodies, TFolder } from "obsidian";
 import { startDeviceFlow } from "./src/github/auth";
 import { GitHubApiError } from "./src/github/client";
 import { createTree } from "./src/github/git-data";
-import { SyncEngine } from "./src/sync/engine";
+import { SyncEngine, isRewriteEnabled } from "./src/sync/engine";
 import { base64ToArrayBuffer } from "./src/sync/blob-sha";
+import { createFolderMapping } from "./src/types";
 
 const encoder = new TextEncoder();
 const originalGitignore = encoder.encode("dist/\\r\\n.cache/\\r\\n");
+
+assert.equal(
+  createFolderMapping().rewriteWikilinks,
+  false,
+  "New folder mappings must default the GitHub rendering pass to off",
+);
+assert.equal(
+  isRewriteEnabled({ rewriteWikilinks: undefined } as any),
+  false,
+  "Mappings without a saved rendering-pass preference must stay off",
+);
+assert.equal(isRewriteEnabled({ rewriteWikilinks: false } as any), false);
+assert.equal(isRewriteEnabled({ rewriteWikilinks: true } as any), true);
 
 await startDeviceFlow("test-client-id");
 assert.equal(

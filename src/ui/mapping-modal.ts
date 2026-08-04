@@ -9,6 +9,7 @@ import {
   MappingDestination,
   PluginSettings,
   SyncDirection,
+  createFolderMapping,
   makeId,
   resolveApiBase,
 } from "../types";
@@ -65,7 +66,7 @@ export class EditMappingModal extends Modal {
     this.isNew = !opts.initial;
     this.mapping = opts.initial
       ? structuredClone(opts.initial)
-      : freshMapping();
+      : createFolderMapping();
     if (!Array.isArray(this.mapping.destinations)) {
       this.mapping.destinations = [];
     }
@@ -208,7 +209,7 @@ export class EditMappingModal extends Modal {
       )
       .addToggle((t) =>
         t
-          .setValue(this.mapping.rewriteWikilinks !== false)
+          .setValue(this.mapping.rewriteWikilinks === true)
           .onChange((v) => {
             this.mapping.rewriteWikilinks = v;
           }),
@@ -465,18 +466,6 @@ function formatVaultFolderLabel(path: string): string {
   const t = (path ?? "").trim();
   if (t === "" || t === "/") return "Whole vault";
   return t;
-}
-
-function freshMapping(): FolderMapping {
-  return {
-    id: makeId(),
-    name: "",
-    vaultFolder: "",
-    direction: "both",
-    autoMode: { kind: "off" },
-    rewriteWikilinks: true,
-    destinations: [],
-  };
 }
 
 function autoModeFromKind(kind: string, prev: AutoMode): AutoMode {

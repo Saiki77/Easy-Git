@@ -177,7 +177,7 @@ What this means in practice:
 
 The math transform has one small trade-off: GitHub renders `\hspace{0.5em}` instead of the original `\phantom{…}`, so the visual alignment can be slightly off (the spacer width is constant rather than matched to the phantom's content). The round-trip back to Obsidian is exact — pulling restores `\phantom{…}` with its original arguments.
 
-All of this is gated on the same per-mapping toggle as the wikilink rewrite ("GitHub rendering pass"), which is on by default.
+All of this is gated on the same per-mapping toggle as the wikilink rewrite ("GitHub rendering pass"), which is off by default. Enable it only for mappings where GitHub-rendered Markdown is more important than pushing the raw source unchanged.
 
 ## Pull-only and push-only semantics
 
@@ -274,7 +274,7 @@ Click it to jump straight to Easy Git's settings. Hidden when you have no mappin
 
 Easy Git tries hard to keep working even when settings drift, get hand-edited, or carry state from an older version:
 
-- **Schema migration on load.** Pre-0.5.0 single-destination mappings are transparently rewritten to the multi-destination shape. Pre-0.2.0 mappings without a `rewriteWikilinks` flag default to wikilink rewrite on.
+- **Schema migration on load.** Pre-0.5.0 single-destination mappings are transparently rewritten to the multi-destination shape. Mappings without a `rewriteWikilinks` flag keep the GitHub rendering pass off rather than being opted in implicitly.
 - **Settings heal pass.** Every load runs a `healSettings()` pass that normalizes vault folder paths (strips slashes), clamps invalid numeric values back to defaults (max file size, retention days, interval minutes, debounce ms), regenerates missing destination IDs, repairs half-cleared auth state, and tops up the global exclude list with safety patterns (`.easy-git-backup/**`, `.obsidian/**`, etc.) without removing any of your additions.
 - **Corrupted data.json fallback.** If the saved settings file is unreadable, the plugin starts with defaults and shows a Notice rather than failing to load.
 - **Folder rename auto-fix.** When you rename a folder inside Obsidian, mappings pointing at it are updated automatically.

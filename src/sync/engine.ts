@@ -232,22 +232,6 @@ export class SyncEngine {
       );
     }
 
-    // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
-    if (
-      mapping.rewriteWikilinks === undefined &&
-      !mapping.rewriteWikilinksMigrated &&
-      mapping.direction !== "pull"
-    ) {
-      mapping.rewriteWikilinks = true;
-      mapping.rewriteWikilinksMigrated = true;
-      if (this.deps.settings.showNotifications) {
-        new Notice(
-          `Easy Git (${mapping.name}): wikilinks will be rewritten to standard Markdown so GitHub renders images. This first sync touches every .md in the mapping.`,
-          8000,
-        );
-      }
-    }
-
     // 3. Read local files (applies wikilink rewrite for .md when enabled).
     const localScan = await this.scanLocalFolder(mapping);
     baseResult.skippedLarge = localScan.skipped;
@@ -1358,10 +1342,11 @@ export class SyncEngine {
 
 /**
  * True if this mapping should have its .md files rewritten on push.
- * Treats `undefined` as `true` (auto-enable on first sync after v0.2 upgrade).
+ * Only an explicit `true` opts into content rewriting. Undefined mappings
+ * remain raw for backward-compatible push/pull byte consistency.
  */
 export function isRewriteEnabled(mapping: FolderMapping): boolean {
-  return mapping.rewriteWikilinks !== false;
+  return mapping.rewriteWikilinks === true;
 }
 
 /** Short "owner/repo:branch/path" label for messages and modal titles. */
