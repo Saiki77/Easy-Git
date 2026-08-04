@@ -14,6 +14,7 @@ import {
   resolveApiBase,
 } from "../types";
 import { isExcluded } from "../sync/exclusion";
+import { hasHiddenPathSegment } from "../sync/hidden-paths";
 
 export interface DiagnoseModalOptions {
   mapping: FolderMapping;
@@ -28,7 +29,7 @@ interface LocalEntry {
   size?: number;
   excluded: boolean;
   excludedBy?: string;
-  dotfile: boolean;
+  hiddenPath: boolean;
 }
 
 interface DiagnosticReport {
@@ -75,7 +76,7 @@ interface DiagnosticReport {
   localScan: {
     includedCount: number;
     excludedCount: number;
-    dotfileCount: number;
+    hiddenPathCount: number;
     paths: string[];
     excludedPaths: Array<{ path: string; pattern: string }>;
   };
@@ -223,7 +224,7 @@ export class DiagnoseModal extends Modal {
     const local = await this.scanLocalWithExcludes(mapping);
     const includedLocal = local.filter((l) => !l.excluded);
     const excludedLocal = local.filter((l) => l.excluded);
-    const dotfileLocal = local.filter((l) => l.dotfile);
+    const hiddenLocal = local.filter((l) => l.hiddenPath);
     const localPaths = new Set(includedLocal.map((l) => l.path));
 
     // .easygitignore content (best-effort read via adapter).
@@ -282,7 +283,7 @@ export class DiagnoseModal extends Modal {
       localScan: {
         includedCount: includedLocal.length,
         excludedCount: excludedLocal.length,
-        dotfileCount: dotfileLocal.length,
+        hiddenPathCount: hiddenLocal.length,
         paths: includedLocal.map((l) => l.path).sort(),
         excludedPaths: excludedLocal.map((l) => ({
           path: l.path,
@@ -343,8 +344,8 @@ export class DiagnoseModal extends Modal {
   }
 
   /**
-   * Adapter-backed local walk that also picks up dotfiles (mirrors the
-   * 1.4.9 engine fix) and tags each file with whether and why it's
+   * Adapter-backed local walk that also picks up hidden files and folders,
+   * and tags each file with whether and why it's
    * filtered by an exclude pattern.
    */
   private async scanLocalWithExcludes(mapping: FolderMapping): Promise<LocalEntry[]> {
@@ -355,7 +356,7 @@ export class DiagnoseModal extends Modal {
     if (!root) return [];
 
     const globalExcludes = this.opts.settings.excludedPaths ?? [];
-    const safetyExcludes = [".easygitignore", ".easy-git-backup/**"];
+    const safetyExcludes = [".easy-git-backup/**"];
     const localIgnore = await this.readLocalIgnore(mapping);
     const allPatterns = [...safetyExcludes, ...globalExcludes, ...localIgnore];
 
@@ -376,23 +377,35 @@ export class DiagnoseModal extends Modal {
             size: child.stat.size,
             excluded: matchedBy !== null,
             excludedBy: matchedBy ?? undefined,
-            dotfile: false,
+            hiddenPath: false,
           });
         }
       }
     }
 
-    // Dotfile pass via adapter — matches the 1.4.9 engine behaviour so
+    // Hidden-path pass via adapter — mirrors the sync engine so
     // the diagnostic reflects what an actual sync would see, not just
     // what the vault layer surfaces.
     const seenPaths = new Set(entries.map((e) => e.path));
+    const seenFolders = new Set(folderPaths);
     for (const folderPath of folderPaths) {
       try {
         const listing = await this.app.vault.adapter.list(folderPath || "/");
+        for (const hiddenFolder of listing.folders) {
+          const rel = this.relativeTo(mapping.vaultFolder, hiddenFolder);
+          if (
+            hasHiddenPathSegment(rel) &&
+            this.firstMatchingPattern(hiddenFolder, rel, allPatterns) === null &&
+            !seenFolders.has(hiddenFolder)
+          ) {
+            seenFolders.add(hiddenFolder);
+            folderPaths.push(hiddenFolder);
+          }
+        }
         for (const filePath of listing.files) {
           const basename = filePath.substring(filePath.lastIndexOf("/") + 1);
-          if (!basename.startsWith(".")) continue;
           const rel = this.relativeTo(mapping.vaultFolder, filePath);
+          if (!basename.startsWith(".") && !hasHiddenPathSegment(rel)) continue;
           if (seenPaths.has(rel)) continue;
           const matchedBy = this.firstMatchingPattern(filePath, rel, allPatterns);
           let size: number | undefined;
@@ -409,7 +422,7 @@ export class DiagnoseModal extends Modal {
             size,
             excluded: matchedBy !== null,
             excludedBy: matchedBy ?? undefined,
-            dotfile: true,
+            hiddenPath: true,
           });
           seenPaths.add(rel);
         }
@@ -521,7 +534,9 @@ export class DiagnoseModal extends Modal {
     });
     ul.createEl("li", {
       text: `Files in vault (included): ${r.localScan.includedCount}` +
-        (r.localScan.dotfileCount > 0 ? ` (${r.localScan.dotfileCount} dotfiles)` : ""),
+        (r.localScan.hiddenPathCount > 0
+          ? ` (${r.localScan.hiddenPathCount} hidden paths)`
+          : ""),
     });
     if (r.localScan.excludedCount > 0) {
       ul.createEl("li", {
@@ -867,7 +882,7 @@ export class DiagnoseModal extends Modal {
     h(2, "Counts");
     kv("Files on remote", String(r.remoteScan?.fileCount ?? "n/a"));
     kv("Files in vault (included)", String(r.localScan.includedCount));
-    kv("Dotfiles in vault", String(r.localScan.dotfileCount));
+    kv("Hidden paths in vault", String(r.localScan.hiddenPathCount));
     kv("Files in vault excluded by patterns", String(r.localScan.excludedCount));
     kv("Files in last-sync state", String(r.lastState.count));
     kv("Would be pulled on next sync", String(r.diff.onRemoteNotLocal.length));

@@ -212,7 +212,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
       .setName("Personal access token")
       .setDesc(
         isGitHub
-          ? "Paste a token with the `repo` scope. Create one at github.com/settings/tokens (fine-grained tokens with content read/write also work)."
+          ? "Paste a token with the `repo` scope. To sync `.github/workflows/**`, also grant `workflow`; fine-grained tokens need Contents and Workflows write access."
           : "Paste a token from your Forgejo instance (User settings → Applications → Access tokens). Needs repository read/write access.",
       )
       .addText((t) => {
@@ -243,15 +243,35 @@ export class EasyGitSettingTab extends PluginSettingTab {
             .onClick(() => {
               const modal = new DeviceFlowModal(this.app, {
                 onSuccess: async ({ token, scope }) => {
-                  this.plugin.settings.auth = {
+                  const nextAuth = {
                     ...this.plugin.settings.auth,
-                    method: "oauth",
+                    method: "oauth" as const,
                     token,
+                    username: undefined,
                     scopes: scope ? scope.split(",") : undefined,
                   };
+                  this.plugin.settings.auth = nextAuth;
                   await this.plugin.saveSettings();
                   status.setText(describeAuth(this.plugin.settings.auth));
-                  new Notice("Easy Git: signed in with GitHub.");
+                  try {
+                    const client = new GitHubClient({
+                      token,
+                      baseUrl: resolveApiBase(nextAuth),
+                    });
+                    const user = await getAuthenticatedUser(client);
+                    this.plugin.settings.auth.username = user.login || undefined;
+                    await this.plugin.saveSettings();
+                    status.setText(describeAuth(this.plugin.settings.auth));
+                    new Notice(
+                      user.login
+                        ? `Easy Git: signed in as ${user.login}.`
+                        : "Easy Git: signed in with GitHub.",
+                    );
+                  } catch {
+                    new Notice(
+                      "Easy Git: signed in with GitHub. Username lookup failed; use Test connection to refresh it.",
+                    );
+                  }
                   this.render();
                 },
               });

@@ -418,12 +418,28 @@ export async function createTree(
   baseTreeSha: string,
   entries: NewTreeEntry[],
 ): Promise<string> {
-  const data = await client.request<{ sha: string }>(
-    "POST",
-    `/repos/${owner}/${repo}/git/trees`,
-    { base_tree: baseTreeSha, tree: entries },
-  );
-  return data.sha;
+  try {
+    const data = await client.request<{ sha: string }>(
+      "POST",
+      `/repos/${owner}/${repo}/git/trees`,
+      { base_tree: baseTreeSha, tree: entries },
+    );
+    return data.sha;
+  } catch (error) {
+    const includesWorkflow = entries.some((entry) =>
+      entry.path.startsWith(".github/workflows/"),
+    );
+    if (
+      includesWorkflow &&
+      error instanceof GitHubApiError &&
+      (error.status === 403 || error.status === 404)
+    ) {
+      throw new Error(
+        "GitHub rejected changes under .github/workflows/. Ensure the token has repository Contents write and workflow write access, or exclude .github/workflows/** from Easy Git.",
+      );
+    }
+    throw error;
+  }
 }
 
 export async function createCommit(

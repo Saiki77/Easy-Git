@@ -53,7 +53,7 @@ export interface DeviceTokenResponse {
 
 export async function startDeviceFlow(
   clientId: string = EASY_GIT_OAUTH_CLIENT_ID,
-  scope = "repo",
+  scope = "repo workflow",
 ): Promise<DeviceCodeResponse> {
   const response = await requestUrl({
     url: "https://github.com/login/device/code",

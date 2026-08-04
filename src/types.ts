@@ -155,7 +155,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     ".git/**",
     "node_modules/**",
     ".easy-git-backup/**",
-    ".claude/**",
     ".DS_Store",
     "Thumbs.db",
     "*.tmp",

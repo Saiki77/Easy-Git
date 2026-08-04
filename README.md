@@ -52,10 +52,14 @@ If you'd like Easy Git to reach another host such as GitLab, Bitbucket, or a dif
 
 Either works for private repos.
 
-- **Personal Access Token.** Create one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope (or a fine-grained token with `Contents: Read and write` + `Metadata: Read`), paste it in settings, hit **Test connection**.
+- **Personal Access Token.** Create one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope (plus `workflow` when syncing `.github/workflows/**`). Fine-grained tokens need `Contents: Read and write`, `Metadata: Read`, and `Workflows: Read and write` for workflow files. Paste it in settings, then hit **Test connection**.
 - **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically.
 
 **Where your token lives.** On Obsidian 1.11.4 and newer, Easy Git stores it in your operating system's keychain rather than in the plugin's settings file, so it never travels with the vault and other plugins can't read it. That also means it is per device: if you use the same vault on a laptop and a phone, sign in once on each. Older Obsidian builds keep the token in `data.json` as before. An existing token is moved into the keychain automatically the first time you run this version.
+
+## Line endings
+
+Easy Git uploads Git blobs through the hosting API; it does not run a local Git checkout. Files that do not require Markdown rewriting are read as raw bytes, so CRLF and LF remain distinct and are uploaded unchanged. When Markdown rewrites are enabled, Easy Git preserves the document's existing line separators while rewriting wikilinks, callouts, highlights, or math syntax.
 
 ## Add a folder mapping
 
@@ -237,7 +241,11 @@ For a step-by-step walkthrough of one sync run, the three-way classifier, the co
 
 ## Per-mapping `.easygitignore`
 
-Drop a `.easygitignore` file at the root of any mapping's vault folder and its patterns are added on top of the global excludes for that mapping only. Same syntax as the global list: one glob per line, `#` for comments, blank lines ignored. Useful when you want to exclude `*.pdf` in one mapping but not another. The `.easygitignore` file itself is never pushed.
+Drop a `.easygitignore` file at the root of any mapping's vault folder and its patterns are added on top of the global excludes for that mapping only. Same syntax as the global list: one glob per line, `#` for comments, blank lines ignored. Useful when you want to exclude `*.pdf` in one mapping but not another. The file itself is synced unless one of its own patterns or the global exclude list explicitly excludes it.
+
+## Hidden files and folders
+
+Easy Git supplements Obsidian's vault index with the low-level adapter so hidden paths such as `.gitignore`, `.github/**`, and `.claude/**` can participate in sync. Safety exclusions still apply: `.git/**`, the vault config directory, `.trash/**`, and `.easy-git-backup/**` remain excluded by default. Existing installations may still have `.claude/**` stored in their editable **Excluded paths** list from an older default; remove that entry manually if you want to sync the directory.
 
 ## Sync log
 

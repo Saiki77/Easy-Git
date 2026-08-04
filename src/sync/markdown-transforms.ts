@@ -16,6 +16,7 @@
  */
 
 import { splitByCodeRegions } from "./wikilink-rewrite";
+import { splitLinesPreservingEndings } from "./line-endings";
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -181,9 +182,9 @@ export function rewriteCalloutsForPush(prose: string): {
   count: number;
 } {
   let count = 0;
-  const lines = prose.split("\n");
+  const lines = splitLinesPreservingEndings(prose);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i].content;
     // Nested blockquote check: `>` count > 1. The first non-whitespace
     // char must be `>`, and after stripping it there can be at most one
     // more `>` separated by whitespace before the `[!`. We just count
@@ -207,10 +208,13 @@ export function rewriteCalloutsForPush(prose: string): {
     // Reassemble: prefix + [!TYPE] + space + marker + (rest with leading
     // space preserved). `rest` already includes the leading space if any.
     const trailing = rest ?? "";
-    lines[i] = `${prefix}[!${target}] ${marker}${trailing}`;
+    lines[i].content = `${prefix}[!${target}] ${marker}${trailing}`;
     count += 1;
   }
-  return { markdown: lines.join("\n"), count };
+  return {
+    markdown: lines.map((line) => line.content + line.ending).join(""),
+    count,
+  };
 }
 
 export function restoreCalloutsFromPush(prose: string): {
@@ -218,16 +222,19 @@ export function restoreCalloutsFromPush(prose: string): {
   count: number;
 } {
   let count = 0;
-  const lines = prose.split("\n");
+  const lines = splitLinesPreservingEndings(prose);
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(CALLOUT_PULL_RE);
+    const m = lines[i].content.match(CALLOUT_PULL_RE);
     if (!m) continue;
     const [, prefix, , origType, collapse, rest] = m;
     const trailing = rest ?? "";
-    lines[i] = `${prefix}[!${origType}]${collapse}${trailing}`;
+    lines[i].content = `${prefix}[!${origType}]${collapse}${trailing}`;
     count += 1;
   }
-  return { markdown: lines.join("\n"), count };
+  return {
+    markdown: lines.map((line) => line.content + line.ending).join(""),
+    count,
+  };
 }
 
 function isNestedBlockquote(line: string): boolean {
