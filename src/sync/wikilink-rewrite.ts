@@ -8,6 +8,8 @@
  * Inputs inside fenced code blocks or inline code are left alone.
  */
 
+import { splitLinesPreservingEndings } from "./line-endings";
+
 const IMAGE_EXTS = new Set([
   "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico", "tiff",
 ]);
@@ -231,7 +233,7 @@ function excalidrawCompanionCandidates(p: string): string[] {
 type Region = { kind: "code" | "prose"; text: string };
 
 export function splitByCodeRegions(md: string): Region[] {
-  const lines = md.split(/\r?\n/);
+  const lines = splitLinesPreservingEndings(md);
   const out: Region[] = [];
   let buf: string[] = [];
   let mode: "prose" | "code" = "prose";
@@ -239,40 +241,32 @@ export function splitByCodeRegions(md: string): Region[] {
 
   const flush = () => {
     if (buf.length === 0) return;
-    // Preserve line breaks faithfully — join with \n and the very last region
-    // gets no trailing newline appended (the join already omits it).
-    out.push({ kind: mode, text: buf.join("\n") });
+    out.push({ kind: mode, text: buf.join("") });
     buf = [];
   };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const fenceMatch = line.match(/^([ \t]*)(```+|~~~+)(.*)$/);
+    const fenceMatch = line.content.match(/^([ \t]*)(```+|~~~+)(.*)$/);
     if (mode === "prose" && fenceMatch) {
       flush();
       mode = "code";
       fence = fenceMatch[2][0] === "`" ? "```" : "~~~";
-      buf.push(line);
-    } else if (mode === "code" && fenceMatch && line.trim().startsWith(fence!)) {
-      buf.push(line);
+      buf.push(line.content + line.ending);
+    } else if (
+      mode === "code" &&
+      fenceMatch &&
+      line.content.trim().startsWith(fence!)
+    ) {
+      buf.push(line.content + line.ending);
       flush();
       mode = "prose";
       fence = null;
     } else {
-      buf.push(line);
+      buf.push(line.content + line.ending);
     }
   }
   flush();
-
-  // Re-join the regions losslessly: insert \n between regions so the round
-  // trip via regions.map(r => r.text).join("\n") reconstructs the original.
-  // But because we want each region to be substituted independently and
-  // re-joined without an extra newline at the end, we'll splice them with
-  // their original separators in the rewriter instead. Simpler: append "\n"
-  // between regions so concatenation yields the original document.
-  for (let i = 0; i < out.length - 1; i++) {
-    out[i].text += "\n";
-  }
   return out;
 }
 

@@ -43,14 +43,10 @@ export interface FolderMapping {
   commitTemplate?: string;
   /**
    * If true, .md files are pushed with Obsidian wikilink embeds rewritten to
-   * standard CommonMark image/link syntax so GitHub renders them. If
-   * undefined on an existing mapping, the engine auto-enables on first
-   * sync after the v0.2 upgrade.
+   * standard CommonMark image/link syntax so GitHub renders them. Undefined
+   * is treated as false so older mappings are never opted in implicitly.
    */
   rewriteWikilinks?: boolean;
-  /** Set to true the first time the engine has auto-enabled rewriteWikilinks
-   * (so the migration Notice fires once, not on every sync). */
-  rewriteWikilinksMigrated?: boolean;
   /**
    * Paused mappings never sync — auto-sync schedules are not wired, "Sync
    * all" skips them, and explicit sync attempts are blocked with a Notice.
@@ -155,7 +151,6 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     ".git/**",
     "node_modules/**",
     ".easy-git-backup/**",
-    ".claude/**",
     ".DS_Store",
     "Thumbs.db",
     "*.tmp",
@@ -285,4 +280,16 @@ export function makeId(): string {
     return crypto.randomUUID();
   }
   return "id-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+export function createFolderMapping(): FolderMapping {
+  return {
+    id: makeId(),
+    name: "",
+    vaultFolder: "",
+    direction: "both",
+    autoMode: { kind: "off" },
+    rewriteWikilinks: false,
+    destinations: [],
+  };
 }

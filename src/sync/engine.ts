@@ -29,9 +29,9 @@ import {
 import {
   arrayBufferToBase64,
   base64ToArrayBuffer,
-  base64ToString,
   computeGitBlobShaFromArrayBuffer,
-  computeGitBlobShaFromString,
+  decodeUtf8,
+  encodeUtf8,
   isLikelyTextPath,
 } from "./blob-sha";
 import {
@@ -51,6 +51,8 @@ import {
   applyPullRestores,
   applyPushTransforms,
 } from "./markdown-transforms";
+import { preferredLineEnding, splitLinesForMerge } from "./line-endings";
+import { hasHiddenPathSegment } from "./hidden-paths";
 import { merge as diff3Merge } from "node-diff3";
 
 /** Counts returned by applyPullModify so runOnce can sum them into the
@@ -228,22 +230,6 @@ export class SyncEngine {
           `:${destination.branch}/${destination.remoteFolder || "/"} → ` +
           `${Object.keys(remote).length} files at commit ${head.commitSha.slice(0, 7)}`,
       );
-    }
-
-    // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
-    if (
-      mapping.rewriteWikilinks === undefined &&
-      !mapping.rewriteWikilinksMigrated &&
-      mapping.direction !== "pull"
-    ) {
-      mapping.rewriteWikilinks = true;
-      mapping.rewriteWikilinksMigrated = true;
-      if (this.deps.settings.showNotifications) {
-        new Notice(
-          `Easy Git (${mapping.name}): wikilinks will be rewritten to standard Markdown so GitHub renders images. This first sync touches every .md in the mapping.`,
-          8000,
-        );
-      }
     }
 
     // 3. Read local files (applies wikilink rewrite for .md when enabled).
@@ -515,7 +501,7 @@ export class SyncEngine {
    * Per-sync caches for the wikilink rewriter so we don't read+rewrite each .md
    * file twice (once during the SHA scan, once during push).
    */
-  private rewriteContentCache: Map<string, string> = new Map();
+  private rewriteContentCache: Map<string, ArrayBuffer> = new Map();
   private attachmentSourceMap: Map<string, string> = new Map();
 
   private async scanLocalFolder(
@@ -573,7 +559,6 @@ export class SyncEngine {
     const skipped: string[] = [];
     const localIgnore = await this.loadLocalIgnore(mapping);
     const excludePatterns = [
-      ".easygitignore",
       ".easy-git-backup/**",
       ...this.deps.settings.excludedPaths,
       ...localIgnore,
@@ -608,7 +593,9 @@ export class SyncEngine {
             continue;
           }
           if (rewriteOn && child.extension === "md") {
-            const text = await this.deps.app.vault.read(child);
+            const sourceBuffer = await this.deps.app.vault.readBinary(child);
+            const decoded = decodeUtf8(sourceBuffer);
+            const text = decoded.text;
             const result = rewriteWikilinks(text, {
               sourcePath: child.path,
               mappingVaultFolder: mapping.vaultFolder,
@@ -629,13 +616,23 @@ export class SyncEngine {
             for (const blob of result.extraBlobs) {
               accumulatedExtraBlobs.push(blob);
             }
-            this.rewriteContentCache.set(relPath, finalText);
-            files[relPath] = {
-              path: relPath,
-              sha: await computeGitBlobShaFromString(finalText),
-              size: new TextEncoder().encode(finalText).byteLength,
-              mtime: child.stat.mtime,
-            };
+            if (finalText === text) {
+              files[relPath] = {
+                path: relPath,
+                sha: await computeGitBlobShaFromArrayBuffer(sourceBuffer),
+                size: sourceBuffer.byteLength,
+                mtime: child.stat.mtime,
+              };
+            } else {
+              const finalBuffer = encodeUtf8(finalText, decoded.hasBom);
+              this.rewriteContentCache.set(relPath, finalBuffer);
+              files[relPath] = {
+                path: relPath,
+                sha: await computeGitBlobShaFromArrayBuffer(finalBuffer),
+                size: finalBuffer.byteLength,
+                mtime: child.stat.mtime,
+              };
+            }
           } else {
             const sha = await this.computeLocalSha(child);
             files[relPath] = {
@@ -649,19 +646,16 @@ export class SyncEngine {
       }
     }
 
-    // Second pass: pick up dotfiles (.gitkeep, .gitignore, etc.) that
-    // Obsidian's vault layer filters out of TFolder.children. We walk the
-    // same folders via the low-level adapter, find files starting with `.`
-    // that we didn't already capture, and add them to the scan. Without
-    // this the classifier would emit pull-add for the same dotfile on
-    // every sync because local "doesn't have it" from the vault's POV —
-    // and the create would fail because the file IS on disk.
-    //
-    // We use the same folder set as the TFolder walk; dot-FOLDERS aren't
-    // handled here (TFolder walk doesn't enter them either) — that's a
-    // rarer case and the apply path's adapter fallback already keeps it
-    // functional, just noisy.
-    await this.augmentScanWithDotfiles(folder, mapping, files, excludePatterns, maxBytes);
+    // Second pass: pick up hidden files and hidden folders that Obsidian's
+    // vault layer omits from TFolder.children. Without this, the classifier
+    // can mistake on-disk hidden paths for remote-only files on every sync.
+    await this.augmentScanWithHiddenPaths(
+      folder,
+      mapping,
+      files,
+      excludePatterns,
+      maxBytes,
+    );
 
     // Fold the deduplicated extra blobs (out-of-folder attachments) into the
     // local file map so the classifier treats them as locally-present files
@@ -749,34 +743,40 @@ export class SyncEngine {
           getBlobContent(client, destination.repoOwner, destination.repoName, baseFileSha),
           getBlobContent(client, destination.repoOwner, destination.repoName, c.remoteSha),
         ]);
-        const baseText = base64ToString(baseBlob.content);
-        const remoteText = base64ToString(remoteBlob.content);
+        const baseDecoded = decodeUtf8(base64ToArrayBuffer(baseBlob.content));
+        const remoteDecoded = decodeUtf8(base64ToArrayBuffer(remoteBlob.content));
+        const baseText = baseDecoded.text;
+        const remoteText = remoteDecoded.text;
 
         const vaultPath = vaultPathFor(mapping, c.path);
         const file = this.deps.app.vault.getFileByPath(vaultPath);
         if (!file) continue;
-        const localText = await this.deps.app.vault.read(file);
+        const localDecoded = decodeUtf8(await this.deps.app.vault.readBinary(file));
+        const localText = localDecoded.text;
 
         // Run diff3. node-diff3.merge(a, base, b) → { conflict, result: lines }.
         const result = diff3Merge(
-          localText.split("\n"),
-          baseText.split("\n"),
-          remoteText.split("\n"),
+          splitLinesForMerge(localText),
+          splitLinesForMerge(baseText),
+          splitLinesForMerge(remoteText),
         );
         if (result.conflict) continue;
 
         // Backup the existing local content before overwrite.
         await this.backupVaultFile(mapping, vaultPath, backupTimestamp);
 
-        const mergedText = result.result.join("\n");
-        await this.deps.app.vault.modify(file, mergedText);
+        const mergedText = result.result.join(
+          preferredLineEnding(localText, baseText, remoteText),
+        );
+        const mergedBuffer = encodeUtf8(mergedText, localDecoded.hasBom);
+        await this.deps.app.vault.modifyBinary(file, mergedBuffer);
 
         // Update the in-memory local scan so push-modify reads the new SHA.
-        const newSha = await computeGitBlobShaFromString(mergedText);
+        const newSha = await computeGitBlobShaFromArrayBuffer(mergedBuffer);
         localFiles[c.path] = {
           path: c.path,
           sha: newSha,
-          size: new TextEncoder().encode(mergedText).byteLength,
+          size: mergedBuffer.byteLength,
           mtime: Date.now(),
         };
 
@@ -825,23 +825,14 @@ export class SyncEngine {
 
     try {
       if (file) {
-        // Vault API path — preserves Obsidian's internal indexing.
-        if (isLikelyTextPath(file.path)) {
-          const text = await this.deps.app.vault.read(file);
-          await this.deps.app.vault.create(backupPath, text);
-        } else {
-          const buf = await this.deps.app.vault.readBinary(file);
-          await this.deps.app.vault.createBinary(backupPath, buf);
-        }
+        // Read and write backups as bytes so CRLF, BOMs, and binary content
+        // are preserved regardless of the file extension.
+        const buf = await this.deps.app.vault.readBinary(file);
+        await this.deps.app.vault.createBinary(backupPath, buf);
       } else {
         // Adapter path — for dotfiles vault.getFileByPath couldn't see.
-        if (isLikelyTextPath(vaultPath)) {
-          const text = await adapter.read(vaultPath);
-          await adapter.write(backupPath, text);
-        } else {
-          const buf = await adapter.readBinary(vaultPath);
-          await adapter.writeBinary(backupPath, buf);
-        }
+        const buf = await adapter.readBinary(vaultPath);
+        await adapter.writeBinary(backupPath, buf);
       }
       return true;
     } catch (e) {
@@ -908,10 +899,9 @@ export class SyncEngine {
       ? ""
       : mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
     const path = folder ? `${folder}/.easygitignore` : ".easygitignore";
-    const file = this.deps.app.vault.getFileByPath(path);
-    if (!file) return [];
     try {
-      const text = await this.deps.app.vault.read(file);
+      if (!(await this.deps.app.vault.adapter.exists(path))) return [];
+      const text = await this.deps.app.vault.adapter.read(path);
       return text.split(/\r?\n/);
     } catch {
       return [];
@@ -927,26 +917,21 @@ export class SyncEngine {
   }
 
   private async computeLocalSha(file: TFile): Promise<string> {
-    if (isLikelyTextPath(file.path)) {
-      const text = await this.deps.app.vault.read(file);
-      return computeGitBlobShaFromString(text);
-    }
     const buf = await this.deps.app.vault.readBinary(file);
     return computeGitBlobShaFromArrayBuffer(buf);
   }
 
   /**
    * Walk the mapping's vault folder tree at the low-level adapter layer
-   * and add any dotfile (basename starts with `.`) that the TFolder walk
-   * missed. Obsidian's TFolder.children filters dotfiles out of its
-   * results, so a `.gitkeep` or `.gitignore` that exists on disk would
-   * otherwise be invisible to the engine — and the next sync would try
-   * to pull it again, hit "file already exists" on the apply, and abort.
+   * and add hidden files and folders that the TFolder walk missed.
+   * Obsidian's TFolder.children filters dotfiles and dot-directories out of
+   * its results, so `.gitignore`, `.github/**`, and `.claude/**` would
+   * otherwise be invisible to the engine.
    *
    * Cheap: one `adapter.list()` per folder we already visited (Obsidian
-   * caches these). Only computes SHAs for the dotfiles found.
+   * caches these). Only computes SHAs for hidden files the vault walk missed.
    */
-  private async augmentScanWithDotfiles(
+  private async augmentScanWithHiddenPaths(
     rootFolder: TFolder,
     mapping: FolderMapping,
     files: Record<string, LocalFileEntry>,
@@ -954,12 +939,18 @@ export class SyncEngine {
     maxBytes: number,
   ): Promise<void> {
     const adapter = this.deps.app.vault.adapter;
-    // Collect every folder path we visited so we can re-walk via adapter.
+    // Seed the walk with folders visible to Obsidian, then discover hidden
+    // folders from the adapter listings. This also catches hidden folders
+    // nested below an ordinary folder.
     const folderPaths: string[] = [];
+    const seenFolders = new Set<string>();
     const stack: TFolder[] = [rootFolder];
     while (stack.length > 0) {
       const cur = stack.pop()!;
-      folderPaths.push(cur.path);
+      if (!seenFolders.has(cur.path)) {
+        seenFolders.add(cur.path);
+        folderPaths.push(cur.path);
+      }
       for (const child of cur.children) {
         if (child instanceof TFolder) stack.push(child);
       }
@@ -973,11 +964,24 @@ export class SyncEngine {
       } catch {
         continue;
       }
+      for (const hiddenFolder of listing.folders) {
+        const relativeFolder = relativeTo(mapping.vaultFolder, hiddenFolder);
+        if (
+          hasHiddenPathSegment(relativeFolder) &&
+          !isExcluded(hiddenFolder, excludePatterns) &&
+          !isExcluded(relativeFolder, excludePatterns) &&
+          !seenFolders.has(hiddenFolder)
+        ) {
+          seenFolders.add(hiddenFolder);
+          folderPaths.push(hiddenFolder);
+        }
+      }
       for (const filePath of listing.files) {
         const basename = filePath.substring(filePath.lastIndexOf("/") + 1);
-        if (!basename.startsWith(".")) continue;
+        const relativePath = relativeTo(mapping.vaultFolder, filePath);
+        if (!basename.startsWith(".") && !hasHiddenPathSegment(relativePath)) continue;
         // Already captured by the TFolder walk? Skip.
-        const relPath = relativeTo(mapping.vaultFolder, filePath);
+        const relPath = relativePath;
         if (files[relPath]) continue;
         // Honour the exclude list — dotfiles get the same treatment as
         // normal files, so a `.git/**` global exclude still blocks
@@ -998,13 +1002,8 @@ export class SyncEngine {
         if (!stat || stat.size > maxBytes) continue;
         let sha: string;
         try {
-          if (isLikelyTextPath(filePath)) {
-            const text = await adapter.read(filePath);
-            sha = await computeGitBlobShaFromString(text);
-          } else {
-            const buf = await adapter.readBinary(filePath);
-            sha = await computeGitBlobShaFromArrayBuffer(buf);
-          }
+          const buf = await adapter.readBinary(filePath);
+          sha = await computeGitBlobShaFromArrayBuffer(buf);
         } catch {
           continue;
         }
@@ -1040,7 +1039,9 @@ export class SyncEngine {
         findFileCaseInsensitive(this.deps.app, fullPath);
       const isText = isLikelyTextPath(fullPath) && blob.encoding !== "base64-binary";
       if (isText) {
-        let text = base64ToString(blob.content);
+        const sourceBuffer = base64ToArrayBuffer(blob.content);
+        const decoded = decodeUtf8(sourceBuffer);
+        let text = decoded.text;
         // Pull-side restore: invert the push-time GitHub rendering
         // rewrites (callouts, highlights, math) for .md files when
         // rewriteWikilinks is enabled. No-op on files that have no
@@ -1056,10 +1057,13 @@ export class SyncEngine {
           if (restored.highlightsRestored > 0) counts.highlightsRestored = restored.highlightsRestored;
           if (restored.mathMacrosRestored > 0) counts.mathMacrosRestored = restored.mathMacrosRestored;
         }
+        const outputBuffer = text === decoded.text
+          ? sourceBuffer
+          : encodeUtf8(text, decoded.hasBom);
         if (existing) {
-          await this.deps.app.vault.modify(existing, text);
+          await this.deps.app.vault.modifyBinary(existing, outputBuffer);
         } else {
-          await this.createOrFallbackText(fullPath, text);
+          await this.createOrFallbackBinary(fullPath, outputBuffer);
         }
       } else {
         const buf = base64ToArrayBuffer(blob.content);
@@ -1073,37 +1077,6 @@ export class SyncEngine {
       throw annotateWithPath(e, fullPath);
     }
     return counts;
-  }
-
-  /**
-   * Create a text file. Handles two filesystem realities the high-level
-   * vault API can't:
-   *
-   * 1. Case-insensitive collisions (macOS/Windows): vault.create rejects
-   *    if a same-name-different-case file exists. Fall back to modify.
-   * 2. Files Obsidian's vault layer doesn't index — most notably dotfiles
-   *    like `.gitkeep` and `.gitignore` (Obsidian filters them out of
-   *    getFiles()/getFileByPath()) even when they exist on disk. The
-   *    high-level create rejects ("already exists") AND the vault-API
-   *    lookup returns null. Last resort: write via the low-level adapter
-   *    which is filesystem-faithful. That covers anything the vault
-   *    abstraction hides.
-   */
-  private async createOrFallbackText(path: string, text: string): Promise<void> {
-    try {
-      await this.deps.app.vault.create(path, text);
-      return;
-    } catch (e) {
-      if (!/already exists/i.test(String(e))) throw e;
-    }
-    const existing = findFileCaseInsensitive(this.deps.app, path);
-    if (existing) {
-      await this.deps.app.vault.modify(existing, text);
-      return;
-    }
-    // Adapter fallback for dotfiles and anything else vault.getFiles()
-    // doesn't surface.
-    await this.deps.app.vault.adapter.write(path, text);
   }
 
   private async createOrFallbackBinary(path: string, buf: ArrayBuffer): Promise<void> {
@@ -1132,7 +1105,14 @@ export class SyncEngine {
         findFileCaseInsensitive(this.deps.app, fullPath);
       // Use trashFile so the deletion respects the user's "deleted files"
       // preference (system trash / .trash / permanent) instead of hard-deleting.
-      if (existing) await this.deps.app.fileManager.trashFile(existing);
+      if (existing) {
+        await this.deps.app.fileManager.trashFile(existing);
+      } else if (await this.deps.app.vault.adapter.exists(fullPath)) {
+        // Hidden files are intentionally absent from Obsidian's file index.
+        // Move them to the vault's local trash instead of permanently
+        // deleting them through the adapter.
+        await this.deps.app.vault.adapter.trashLocal(fullPath);
+      }
     } catch (e) {
       throw annotateWithPath(e, fullPath);
     }
@@ -1146,7 +1126,13 @@ export class SyncEngine {
     const fromPath = vaultPathFor(mapping, fromRel);
     const toPath = vaultPathFor(mapping, toRel);
     const file = this.deps.app.vault.getFileByPath(fromPath);
-    if (!file) return;
+    if (!file) {
+      const adapter = this.deps.app.vault.adapter;
+      if (!(await adapter.exists(fromPath))) return;
+      await ensureVaultFolder(this.deps.app, parentOf(toPath));
+      await adapter.rename(fromPath, toPath);
+      return;
+    }
     await ensureVaultFolder(this.deps.app, parentOf(toPath));
     await this.deps.app.fileManager.renameFile(file, toPath);
   }
@@ -1326,8 +1312,7 @@ export class SyncEngine {
     // Cached rewritten markdown content (computed during scan).
     const cached = this.rewriteContentCache.get(relPath);
     if (cached !== undefined) {
-      const bytes = new TextEncoder().encode(cached);
-      return { base64: arrayBufferToBase64(bytes.buffer) };
+      return { base64: arrayBufferToBase64(cached) };
     }
     // Out-of-folder attachment: read from its real vault path.
     const attachmentSource = this.attachmentSourceMap.get(relPath);
@@ -1342,11 +1327,13 @@ export class SyncEngine {
 
     const fullPath = vaultPathFor(mapping, relPath);
     const file = this.deps.app.vault.getFileByPath(fullPath);
-    if (!file) throw new Error(`Vault file not found: ${fullPath}`);
-    if (isLikelyTextPath(file.path)) {
-      const text = await this.deps.app.vault.read(file);
-      const bytes = new TextEncoder().encode(text);
-      return { base64: arrayBufferToBase64(bytes.buffer) };
+    if (!file) {
+      const adapter = this.deps.app.vault.adapter;
+      if (!(await adapter.exists(fullPath))) {
+        throw new Error(`Vault file not found: ${fullPath}`);
+      }
+      const buf = await adapter.readBinary(fullPath);
+      return { base64: arrayBufferToBase64(buf) };
     }
     const buf = await this.deps.app.vault.readBinary(file);
     return { base64: arrayBufferToBase64(buf) };
@@ -1355,10 +1342,11 @@ export class SyncEngine {
 
 /**
  * True if this mapping should have its .md files rewritten on push.
- * Treats `undefined` as `true` (auto-enable on first sync after v0.2 upgrade).
+ * Only an explicit `true` opts into content rewriting. Undefined mappings
+ * remain raw for backward-compatible push/pull byte consistency.
  */
 export function isRewriteEnabled(mapping: FolderMapping): boolean {
-  return mapping.rewriteWikilinks !== false;
+  return mapping.rewriteWikilinks === true;
 }
 
 /** Short "owner/repo:branch/path" label for messages and modal titles. */

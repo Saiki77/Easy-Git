@@ -49,7 +49,29 @@ export function base64ToArrayBuffer(b64: string): ArrayBuffer {
 
 export function base64ToString(b64: string): string {
   const buf = base64ToArrayBuffer(b64);
-  return new TextDecoder().decode(buf);
+  return decodeUtf8(buf).text;
+}
+
+export function decodeUtf8(buf: ArrayBuffer): { text: string; hasBom: boolean } {
+  const bytes = new Uint8Array(buf);
+  const hasBom =
+    bytes.byteLength >= 3 &&
+    bytes[0] === 0xef &&
+    bytes[1] === 0xbb &&
+    bytes[2] === 0xbf;
+  return {
+    text: new TextDecoder().decode(hasBom ? bytes.subarray(3) : bytes),
+    hasBom,
+  };
+}
+
+export function encodeUtf8(text: string, withBom = false): ArrayBuffer {
+  const encoded = new TextEncoder().encode(text);
+  if (!withBom) return encoded.buffer;
+  const bytes = new Uint8Array(encoded.byteLength + 3);
+  bytes.set([0xef, 0xbb, 0xbf], 0);
+  bytes.set(encoded, 3);
+  return bytes.buffer;
 }
 
 function bytesToHex(bytes: Uint8Array): string {

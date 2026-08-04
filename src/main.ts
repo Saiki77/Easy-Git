@@ -404,7 +404,6 @@ export default class EasyGitPlugin extends Plugin {
     // --- Excluded paths: keep user entries; ensure the safety set is in. ---
     const safeExcludes = [
       ".easy-git-backup/**",
-      ".claude/**",
       ".DS_Store",
       ".trash/**",
       // Use the vault's actual config dir (the user may have changed it from
