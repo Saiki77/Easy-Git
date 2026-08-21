@@ -12,6 +12,7 @@ import {
   ConflictEntry,
   DEFAULT_SETTINGS,
   FolderMapping,
+  LocalFileEntry,
   MappingDestination,
   PluginSettings,
   SYNC_LOG_MAX,
@@ -25,6 +26,8 @@ import { EasyGitSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
 import { MappingNameSuggest } from "./ui/pickers";
+import { PruneLocalModal } from "./ui/prune-modal";
+import { PruneResult } from "./sync/reconcile";
 import { StatusBarIndicator, StatusState } from "./ui/status-bar";
 import {
   clearStoredToken,
@@ -140,6 +143,12 @@ export default class EasyGitPlugin extends Plugin {
       id: "reset-sync-state",
       name: "Reset sync state (force full re-scan on next sync)",
       callback: () => this.pickMappingToResetState(),
+    });
+
+    this.addCommand({
+      id: "prune-local-only",
+      name: "Prune local-only files… (remove vault files that are not on remote)",
+      callback: () => this.pickMappingToPrune(),
     });
 
     // Status bar indicator — shows aggregate sync state, clicks to open settings.
@@ -738,6 +747,155 @@ export default class EasyGitPlugin extends Plugin {
         );
       },
     ).open();
+  }
+
+  /**
+   * Engine-faithful local scan for the diagnose modal (same exclusions and
+   * SHAs a sync would compute). Read-only.
+   */
+  scanLocalShas(mapping: FolderMapping): Promise<Record<string, LocalFileEntry>> {
+    return this.engine.scanLocalFiles(mapping);
+  }
+
+  /**
+   * Command-palette entry for "Prune local-only files". Push-only mappings
+   * are left out: there, local is the source of truth and a local-only
+   * file is simply the next push.
+   */
+  private pickMappingToPrune(): void {
+    const eligible = this.settings.mappings.filter((m) => m.direction !== "push");
+    if (eligible.length === 0) {
+      new Notice(
+        "Easy Git: no pull-only or bidirectional mappings. Push-only mappings treat local as the source of truth, so there is nothing to prune.",
+      );
+      return;
+    }
+    new MappingNameSuggest(
+      this.app,
+      eligible,
+      "Prune local-only files for which mapping?",
+      (mapping) => this.openPruneModal(mapping.id),
+    ).open();
+  }
+
+  /**
+   * Open the prune preview for a saved mapping. Explicit and user-driven:
+   * nothing here runs on a schedule and no sync path calls it. The preview
+   * lists vault files that exist at none of the mapping's remotes; the user
+   * picks, confirms, and only then are files backed up and moved to trash.
+   */
+  openPruneModal(mappingId: string): void {
+    const mapping = this.settings.mappings.find((m) => m.id === mappingId);
+    if (!mapping) {
+      new Notice("Easy Git: save the mapping first, then prune.");
+      return;
+    }
+    if (mapping.direction === "push") {
+      new Notice(
+        `Easy Git: "${mapping.name}" is push-only. Local is the source of truth there; nothing to prune.`,
+      );
+      return;
+    }
+    if (this.syncing.has(mapping.id)) {
+      new Notice(`Easy Git: "${mapping.name}" is syncing. Try again when it finishes.`);
+      return;
+    }
+    new PruneLocalModal(this.app, {
+      mapping,
+      load: () =>
+        this.withMappingBusy(mapping.id, () => this.engine.scanLocalOnlyFiles(mapping)),
+      onConfirm: (paths) => this.runPrune(mapping, paths),
+    }).open();
+  }
+
+  private async runPrune(mapping: FolderMapping, paths: string[]): Promise<void> {
+    if (this.syncing.has(mapping.id)) {
+      new Notice(
+        `Easy Git: "${mapping.name}" started syncing in the meantime. Nothing was pruned; try again when it finishes.`,
+      );
+      return;
+    }
+    const start = Date.now();
+    const result = await this.withMappingBusy(mapping.id, () =>
+      this.engine.pruneLocalFiles(mapping, paths),
+    );
+    this.recordPruneResult(mapping, result, paths.length, Date.now() - start);
+    await this.saveSettings();
+
+    const n = result.pruned.length;
+    if (result.error) {
+      new Notice(
+        `Easy Git (${mapping.name}): prune stopped after ${n} of ${paths.length} files: ${result.error}`,
+        10000,
+      );
+      return;
+    }
+    const parts = [`pruned ${n} file${n === 1 ? "" : "s"}`];
+    if (result.backupFolder) parts.push(`backup in ${result.backupFolder}`);
+    if (result.emptyFoldersRemoved > 0) {
+      const k = result.emptyFoldersRemoved;
+      parts.push(`removed ${k} empty folder${k === 1 ? "" : "s"}`);
+    }
+    if (result.missing.length > 0) parts.push(`${result.missing.length} already gone`);
+    new Notice(`Easy Git (${mapping.name}): ${parts.join(", ")}.`, 8000);
+  }
+
+  /**
+   * Mark a mapping busy for the duration of `fn`, exactly like a sync run:
+   * the settings row and status bar show it, and auto-sync triggers that
+   * fire meanwhile are queued and run afterwards instead of overlapping.
+   */
+  private async withMappingBusy<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    this.syncing.add(id);
+    this.statusBar?.refresh();
+    this.settingsTab?.refreshSyncStates();
+    try {
+      return await fn();
+    } finally {
+      this.syncing.delete(id);
+      this.statusBar?.refresh();
+      this.settingsTab?.refreshSyncStates();
+      if (this.pendingAfterSync.has(id)) {
+        this.pendingAfterSync.delete(id);
+        window.setTimeout(() => void this.syncMapping(id, "on-save"), 0);
+      }
+    }
+  }
+
+  /** Record a prune in the sync log so it shows up next to the sync runs. */
+  private recordPruneResult(
+    mapping: FolderMapping,
+    result: PruneResult,
+    requested: number,
+    durationMs: number,
+  ): void {
+    const first = mapping.destinations[0];
+    const entry: SyncLogEntry = {
+      timestamp: Date.now(),
+      mappingId: mapping.id,
+      mappingName: mapping.name,
+      destinationId: first?.id ?? "",
+      destinationLabel:
+        mapping.destinations.length === 1 && first
+          ? destinationLabel(first)
+          : `all ${mapping.destinations.length} destinations`,
+      trigger: "prune",
+      ok: !result.error,
+      added: 0,
+      modified: 0,
+      deleted: result.pruned.length,
+      conflicts: 0,
+      filesTouched: result.pruned.length,
+      changedPaths: result.pruned,
+      error: result.error
+        ? `Stopped after ${result.pruned.length} of ${requested} files: ${result.error}`
+        : undefined,
+      durationMs,
+    };
+    const log = this.settings.syncLog ?? [];
+    log.unshift(entry);
+    if (log.length > SYNC_LOG_MAX) log.length = SYNC_LOG_MAX;
+    this.settings.syncLog = log;
   }
 
   /**

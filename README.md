@@ -184,7 +184,7 @@ What this means in practice:
 - **A new file on GitHub appears locally on the next sync.** No state-cache lookup; if it's on remote and not local, it's pulled. Period.
 - **A changed file on GitHub overwrites local on the next sync.** The pre-existing local file is copied to `.easy-git-backup/<timestamp>/` first, so nothing is lost.
 - **A file deleted on GitHub is removed locally** only when local matches what we last pulled (i.e. you didn't edit it). If you edited a file locally and the file then disappeared from GitHub, your local edit is preserved and a Notice is logged.
-- **A file you create locally that was never on GitHub is left alone.** Pull-only doesn't mirror destruction — local-only additions stay. The plugin only deletes files it previously pulled itself.
+- **A file you create locally that was never on GitHub is left alone.** Pull-only doesn't mirror destruction — local-only additions stay. The plugin only deletes files it previously pulled itself. If local-only files are stale leftovers of a reorganisation on remote, use **Prune local-only files** (see below) to review and remove them explicitly.
 
 Push-only is symmetric: local is the source of truth; remote-only files the plugin never pushed are left alone; the plugin only deletes remote files it previously pushed.
 
@@ -202,7 +202,7 @@ In all three paths, local files are protected by the backup mechanism below.
 
 ## Backups
 
-Easy Git never overwrites a local file without first writing a snapshot of the pre-existing content to a backup folder, unless the mapping is set to **pull only** (in which case you've explicitly opted into remote-wins behavior).
+Easy Git never overwrites or deletes a local file without first writing a snapshot of the pre-existing content to a backup folder. That includes pull-only mappings: since 1.4.7 the pull-only classifier reconciles against the live remote, so the backup is the safety net there too.
 
 Before any `pull-modify` or `pull-delete` operation, the engine snapshots the current local file to:
 
@@ -212,9 +212,20 @@ Before any `pull-modify` or `pull-delete` operation, the engine snapshots the cu
 
 One folder per sync run, files preserved with their full vault paths inside. The folder is hardcoded to be excluded from any sync, so backups never travel to your remote — they're local-only.
 
-If a backup write itself fails (disk full, permission error, etc.), the sync aborts with a clear error rather than risk overwriting your file without a safety net. The promise: **your local content is never lost unless you've explicitly told the plugin "pull only" for this mapping.**
+If a backup write itself fails (disk full, permission error, etc.), the sync aborts with a clear error rather than risk overwriting your file without a safety net. The promise: **your local content is never lost, in any direction.**
 
 Backups can be auto-pruned. Open **Settings → Easy Git → Backups** and set "Auto-prune backups older than (days)" to anything above 0 — the engine deletes timestamped subfolders past that window at the end of each sync. Leave it at 0 to keep every snapshot forever (the default for existing installs).
+
+## Pruning local-only files
+
+Pull-only keeps local-only files on purpose, but that also keeps the stale half of a move or rename that happened on remote. When files are reorganised directly on GitHub (by a collaborator, a script, or an AI agent), the new paths are pulled while the old ones stay in your vault, because nothing in the vault says they were ever on remote. `Easy Git: Prune local-only files…` is the explicit clean-up for that case:
+
+1. Pick a pull-only or bidirectional mapping.
+2. Easy Git compares the vault folder with the live remote tree of every destination and lists the files that exist locally but on no remote. Files whose exact content still exists on remote under another path are marked as moved; files whose content is not on remote are flagged.
+3. Select all, none, only the moved ones, or individual files.
+4. Confirm. Every selected file is copied to `.easy-git-backup/<timestamp>/` first, then moved to trash following your Obsidian "Deleted files" setting. Folders left empty are removed. Nothing is sent to the remote.
+
+The same flow is one click away from the Diagnose modal (**In vault, not on remote** → **Review and prune…**). It never runs on its own: normal syncs are unchanged, and push-only mappings are excluded because there local is the source of truth. Each prune is recorded in the sync log with the trigger `prune`.
 
 ## Conflicts
 
@@ -246,7 +257,7 @@ Every sync run is recorded in an in-Obsidian log so you can see exactly what hap
 - The **View sync log** button next to **+ Add mapping** in settings, or
 - The command palette: `Easy Git: Show sync log`
 
-Each entry shows the mapping and destination, when it ran, the trigger (manual, interval, startup, on-save, command), the duration, and the outcome. Successful runs list the files added, modified, or deleted. Failed runs surface the full error including the vault path that caused it. The log keeps the most recent 100 entries and can be cleared from the log modal.
+Each entry shows the mapping and destination, when it ran, the trigger (manual, interval, startup, on-save, command, prune), the duration, and the outcome. Successful runs list the files added, modified, or deleted. Failed runs surface the full error including the vault path that caused it. The log keeps the most recent 100 entries and can be cleared from the log modal.
 
 If a sync errors with `File already exists at "Notes/Foo.md"` (or similar), that's a case-insensitive filename collision: the remote has one casing and your vault has another. Easy Git tries to recover automatically by writing the new content to the existing file regardless of case; the error only surfaces if recovery itself fails.
 

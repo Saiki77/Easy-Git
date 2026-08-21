@@ -7,6 +7,7 @@ import {
 import { describeAuthError, getAuthenticatedUser } from "../github/auth";
 import {
   FolderMapping,
+  LocalFileEntry,
   MappingDestination,
   PluginSettings,
   RemoteFileEntry,
@@ -20,6 +21,13 @@ export interface DiagnoseModalOptions {
   destination: MappingDestination;
   settings: PluginSettings;
   pluginVersion: string;
+  /** Engine-faithful local SHA scan (rewritten .md content for push/both
+   * mappings). Without it, "Same path, different SHA" cannot be computed
+   * and that section stays empty. */
+  scanLocalShas?: (mapping: FolderMapping) => Promise<Record<string, LocalFileEntry>>;
+  /** Opens the "Prune local-only files" flow for this mapping. Offered on
+   * pull-only and bidirectional mappings when local-only files exist. */
+  onPruneLocalOnly?: (mappingId: string) => void;
 }
 
 interface LocalEntry {
@@ -222,6 +230,22 @@ export class DiagnoseModal extends Modal {
     // Local scan + exclude classification.
     const local = await this.scanLocalWithExcludes(mapping);
     const includedLocal = local.filter((l) => !l.excluded);
+
+    // Blob SHAs come from the engine's own scan so the "same path,
+    // different SHA" comparison sees exactly what a sync would (rewritten
+    // .md content for push/both mappings, raw content for pull-only).
+    if (this.opts.scanLocalShas) {
+      try {
+        const engineView = await this.opts.scanLocalShas(mapping);
+        for (const l of includedLocal) {
+          l.sha = engineView[l.path]?.sha;
+        }
+      } catch (e) {
+        fetchErrors.push(
+          "Local SHA scan failed: " + (e instanceof Error ? e.message : String(e)),
+        );
+      }
+    }
     const excludedLocal = local.filter((l) => l.excluded);
     const dotfileLocal = local.filter((l) => l.dotfile);
     const localPaths = new Set(includedLocal.map((l) => l.path));
@@ -590,12 +614,24 @@ export class DiagnoseModal extends Modal {
       }
     }
     if (r.diff.onLocalNotRemote.length > 0) {
-      this.renderFileList(
+      const section = this.renderFileList(
         this.bodyEl,
         "In vault, not on remote",
         r.diff.onLocalNotRemote,
         "Push-only or bidirectional mappings push these. Pull-only leaves them alone (they're considered user-added).",
       );
+      const onPrune = this.opts.onPruneLocalOnly;
+      if (onPrune && this.opts.mapping.direction !== "push") {
+        section.createEl("p", {
+          text: "If these are stale copies left behind by a move or reorganisation on remote, review and prune them. Each file is backed up before it is moved to trash.",
+          attr: { style: "color: var(--text-muted);" },
+        });
+        const pruneBtn = section.createEl("button", { text: "Review and prune…" });
+        pruneBtn.onclick = () => {
+          this.close();
+          onPrune(this.opts.mapping.id);
+        };
+      }
     }
     if (r.diff.inLastStateNotRemote.length > 0) {
       this.renderFileList(
@@ -757,7 +793,7 @@ export class DiagnoseModal extends Modal {
     paths: string[],
     description: string,
     cls?: string,
-  ): void {
+  ): HTMLElement {
     const section = parent.createDiv({ cls: "easy-git-diag-section" });
     if (cls) section.addClass(cls);
     section.createEl("h3", { text: `${title} (${paths.length})` });
@@ -772,7 +808,7 @@ export class DiagnoseModal extends Modal {
         text: "(none)",
         attr: { style: "color: var(--text-faint);" },
       });
-      return;
+      return section;
     }
     const list = section.createEl("ul", { cls: "easy-git-diag-files" });
     for (const p of paths.slice(0, 200)) {
@@ -784,6 +820,7 @@ export class DiagnoseModal extends Modal {
         attr: { style: "color: var(--text-muted);" },
       });
     }
+    return section;
   }
 
   // -------------------------------------------------------------------

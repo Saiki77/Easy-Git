@@ -453,6 +453,8 @@ export class EasyGitSettingTab extends PluginSettingTab {
       excludedPaths: this.plugin.settings.excludedPaths,
       settings: this.plugin.settings,
       pluginVersion: this.plugin.manifest.version,
+      scanLocalShas: (m) => this.plugin.scanLocalShas(m),
+      onPruneLocalOnly: (id) => this.plugin.openPruneModal(id),
       onSave: async (m) => {
         const idx = this.plugin.settings.mappings.findIndex((x) => x.id === m.id);
         if (idx >= 0) {

@@ -43,6 +43,12 @@ import {
 import { formatCommitMessage } from "./commit-message";
 import { isExcluded } from "./exclusion";
 import {
+  LocalOnlyScan,
+  PruneResult,
+  ancestorFoldersDeepestFirst,
+  findLocalOnlyCandidates,
+} from "./reconcile";
+import {
   ExtraBlob,
   WikilinkResolver,
   rewriteWikilinks,
@@ -384,8 +390,8 @@ export class SyncEngine {
 
     // 7. Apply pull-side actions. Before any operation that destroys local
     // content (pull-modify of an existing file, pull-delete), back the file
-    // up to .easy-git-backup/<timestamp>/<original-path>. Skipped when the
-    // mapping direction is "pull" (user opted into remote-wins).
+    // up to .easy-git-backup/<timestamp>/<original-path>. Applies to every
+    // direction, pull-only included (see backupVaultFile).
     // backupTimestamp was computed above so step 6.05 can use it too.
     let backupsCreated = 0;
     let calloutsRestored = 0;
@@ -520,6 +526,7 @@ export class SyncEngine {
 
   private async scanLocalFolder(
     mapping: FolderMapping,
+    opts: { populateCaches: boolean } = { populateCaches: true },
   ): Promise<{
     files: Record<string, LocalFileEntry>;
     skipped: string[];
@@ -530,6 +537,9 @@ export class SyncEngine {
     highlightsRewritten: number;
     mathMacrosRewritten: number;
     excludePatterns: string[];
+    /** remoteRelPath to vault path for out-of-folder attachments the
+     * wikilink rewriter folded into `files`. */
+    attachmentSources: Map<string, string>;
   }> {
     const isWholeVault = isVaultRoot(mapping.vaultFolder);
     let folder: TFolder | null;
@@ -580,8 +590,12 @@ export class SyncEngine {
     ];
     const maxBytes = this.deps.settings.maxFileSizeBytes;
 
-    this.rewriteContentCache = new Map();
-    this.attachmentSourceMap = new Map();
+    // Built locally and published to the instance caches at the end, and
+    // only when asked to. Read-only callers (diagnose, prune preview) pass
+    // populateCaches: false so they can never clobber the caches of a sync
+    // that is mid-run.
+    const contentCache = new Map<string, string>();
+    const attachmentSources = new Map<string, string>();
 
     const rewriteOn = isRewriteEnabled(mapping) && mapping.direction !== "pull";
     let unresolvedWikilinks = 0;
@@ -629,7 +643,7 @@ export class SyncEngine {
             for (const blob of result.extraBlobs) {
               accumulatedExtraBlobs.push(blob);
             }
-            this.rewriteContentCache.set(relPath, finalText);
+            contentCache.set(relPath, finalText);
             files[relPath] = {
               path: relPath,
               sha: await computeGitBlobShaFromString(finalText),
@@ -683,7 +697,12 @@ export class SyncEngine {
         size: sourceFile.stat.size,
         mtime: sourceFile.stat.mtime,
       };
-      this.attachmentSourceMap.set(blob.remoteRelPath, blob.vaultPath);
+      attachmentSources.set(blob.remoteRelPath, blob.vaultPath);
+    }
+
+    if (opts.populateCaches) {
+      this.rewriteContentCache = contentCache;
+      this.attachmentSourceMap = attachmentSources;
     }
 
     return {
@@ -696,6 +715,7 @@ export class SyncEngine {
       highlightsRewritten,
       mathMacrosRewritten,
       excludePatterns,
+      attachmentSources,
     };
   }
 
@@ -1350,6 +1370,201 @@ export class SyncEngine {
     }
     const buf = await this.deps.app.vault.readBinary(file);
     return { base64: arrayBufferToBase64(buf) };
+  }
+
+  // -------------------------------------------------------------------
+  // Prune local-only files (explicit, user-driven; never part of a sync)
+  // -------------------------------------------------------------------
+
+  /**
+   * Engine-faithful snapshot of the mapping's vault folder: the same
+   * exclusion rules and the same blob SHAs a sync computes (rewritten .md
+   * content for push/both mappings). Read-only and safe to call from UI
+   * while a sync may be running: the push caches are never touched.
+   * Out-of-folder attachments the wikilink rewriter folds in are left out
+   * because they are not files inside the mapping folder.
+   */
+  async scanLocalFiles(
+    mapping: FolderMapping,
+  ): Promise<Record<string, LocalFileEntry>> {
+    const scan = await this.scanLocalFolder(mapping, { populateCaches: false });
+    const files: Record<string, LocalFileEntry> = {};
+    for (const [path, entry] of Object.entries(scan.files)) {
+      if (scan.attachmentSources.has(path)) continue;
+      files[path] = entry;
+    }
+    return files;
+  }
+
+  /**
+   * Preview for "Prune local-only files": every vault file in the mapping
+   * folder that exists at none of the mapping's destinations, plus a hint
+   * for files whose exact content is on remote under another path.
+   *
+   * Every destination has to answer. If one remote cannot be read this
+   * throws instead of guessing, because a destination silently treated as
+   * empty would flag all of its files as prunable.
+   */
+  async scanLocalOnlyFiles(mapping: FolderMapping): Promise<LocalOnlyScan> {
+    const client = this.clientOrThrow();
+    const local = await this.scanLocalFiles(mapping);
+    // scanLocalFiles already applied the exclude list to the local side;
+    // re-derive the same patterns for the remote side below.
+    const excludePatterns = [
+      ".easygitignore",
+      ".easy-git-backup/**",
+      ...this.deps.settings.excludedPaths,
+      ...(await this.loadLocalIgnore(mapping)),
+    ];
+
+    const remotes: Record<string, RemoteFileEntry>[] = [];
+    const snapshots: LocalOnlyScan["remotes"] = [];
+    for (const destination of mapping.destinations) {
+      const head = await getBranchHead(
+        client,
+        destination.repoOwner,
+        destination.repoName,
+        destination.branch,
+      );
+      const scan = await listRemoteFolderFiles(
+        client,
+        destination.repoOwner,
+        destination.repoName,
+        head.treeSha,
+        destination.remoteFolder,
+      );
+      const remote = scan.files;
+      // Same exclude filter as a sync run, so an excluded remote path is
+      // invisible on both sides here too.
+      for (const rp of Object.keys(remote)) {
+        if (
+          isExcluded(rp, excludePatterns) ||
+          isExcluded(vaultPathFor(mapping, rp), excludePatterns)
+        ) {
+          delete remote[rp];
+        }
+      }
+      remotes.push(remote);
+      snapshots.push({
+        destinationId: destination.id,
+        label: destinationLabel(destination),
+        headCommit: head.commitSha,
+        fileCount: Object.keys(remote).length,
+      });
+    }
+
+    return {
+      candidates: findLocalOnlyCandidates(local, remotes),
+      localFileCount: Object.keys(local).length,
+      remotes: snapshots,
+    };
+  }
+
+  /**
+   * Back up, then trash, the given mapping-relative paths. Local-only:
+   * nothing is sent to any remote. Each file is snapshotted to
+   * `.easy-git-backup/<timestamp>/` with the same mechanism pull-modify and
+   * pull-delete use, then moved to trash per Obsidian's "Deleted files"
+   * preference. Folders the removal left empty are deleted afterwards, and
+   * pruned paths are dropped from every destination's lastSyncState so a
+   * later sync does not treat them as previously tracked.
+   *
+   * Stops at the first failure and reports what was done up to there. A
+   * backup failure is fatal by design, matching the sync path.
+   */
+  async pruneLocalFiles(
+    mapping: FolderMapping,
+    paths: string[],
+  ): Promise<PruneResult> {
+    const result: PruneResult = {
+      pruned: [],
+      missing: [],
+      backupsCreated: 0,
+      emptyFoldersRemoved: 0,
+    };
+    const backupTimestamp = formatBackupTimestamp(new Date());
+    try {
+      for (const rel of paths) {
+        const fullPath = vaultPathFor(mapping, rel);
+        const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
+        if (backed) result.backupsCreated += 1;
+        const removed = await this.trashVaultPath(fullPath);
+        if (removed) result.pruned.push(rel);
+        else result.missing.push(rel);
+        for (const destination of mapping.destinations) {
+          const files = destination.lastSyncState?.files;
+          if (files && rel in files) delete files[rel];
+        }
+      }
+      result.emptyFoldersRemoved = await this.removeEmptiedFolders(mapping, result.pruned);
+    } catch (e) {
+      result.error = e instanceof Error ? e.message : String(e);
+    }
+    if (result.backupsCreated > 0) {
+      result.backupFolder = `.easy-git-backup/${backupTimestamp}/`;
+    }
+    await this.deps.saveSettings();
+    return result;
+  }
+
+  private clientOrThrow(): GitHubClient {
+    const auth = this.deps.settings.auth;
+    if (auth.method === "none" || !auth.token) {
+      throw new Error("Not signed in. Configure auth in settings.");
+    }
+    const cfgError = authConfigError(auth);
+    if (cfgError) throw new Error(cfgError);
+    return new GitHubClient({ token: auth.token, baseUrl: resolveApiBase(auth) });
+  }
+
+  /**
+   * Move one vault path to trash, honouring the user's "Deleted files"
+   * setting. Same route as applyPullDelete for files Obsidian indexes, plus
+   * an adapter fallback for dotfiles, which the vault layer hides but the
+   * local scan picks up. Returns false when nothing existed at the path.
+   */
+  private async trashVaultPath(fullPath: string): Promise<boolean> {
+    const file =
+      this.deps.app.vault.getFileByPath(fullPath) ??
+      findFileCaseInsensitive(this.deps.app, fullPath);
+    if (file) {
+      await this.deps.app.fileManager.trashFile(file);
+      return true;
+    }
+    const adapter = this.deps.app.vault.adapter;
+    if (!(await adapter.exists(fullPath))) return false;
+    // Same order Obsidian itself uses: system trash, then the vault's .trash.
+    const systemTrashed = await adapter.trashSystem(fullPath);
+    if (!systemTrashed) await adapter.trashLocal(fullPath);
+    return true;
+  }
+
+  /**
+   * Delete folders the prune left empty. Only ancestors of pruned files
+   * are considered, deepest first, and the mapping folder itself never is.
+   * Emptiness is checked through the adapter so a folder that still holds
+   * a dotfile (invisible to TFolder.children) survives. Best-effort: a
+   * folder that cannot be listed or removed is left alone.
+   */
+  private async removeEmptiedFolders(
+    mapping: FolderMapping,
+    prunedRelPaths: string[],
+  ): Promise<number> {
+    const adapter = this.deps.app.vault.adapter;
+    let removed = 0;
+    for (const relFolder of ancestorFoldersDeepestFirst(prunedRelPaths)) {
+      const fullPath = vaultPathFor(mapping, relFolder);
+      try {
+        if (!(await adapter.exists(fullPath))) continue;
+        const listing = await adapter.list(fullPath);
+        if (listing.files.length > 0 || listing.folders.length > 0) continue;
+        await adapter.rmdir(fullPath, false);
+        removed += 1;
+      } catch {
+        /* an empty folder left behind is harmless */
+      }
+    }
+    return removed;
   }
 }
 

@@ -553,3 +553,63 @@
   font-family: var(--font-monospace);
   font-size: 0.95em;
 }
+
+/* Prune local-only files modal */
+.easy-git-prune-sub {
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.easy-git-prune-remotes {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin: 0 0 0.5rem;
+  padding-left: 1.2rem;
+}
+
+.easy-git-prune-warning {
+  color: var(--text-warning);
+  font-weight: 600;
+}
+
+.easy-git-prune-error {
+  color: var(--text-error);
+}
+
+.easy-git-prune-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.easy-git-prune-row {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  margin-bottom: 0.35rem;
+  background-color: var(--background-secondary);
+}
+
+.easy-git-prune-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.easy-git-prune-path {
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+.easy-git-prune-hint {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  margin: 0.15rem 0 0 1.6rem;
+  word-break: break-all;
+}
+
+.easy-git-prune-row.is-unique .easy-git-prune-hint {
+  color: var(--text-warning);
+}

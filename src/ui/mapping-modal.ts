@@ -6,6 +6,7 @@ import {
   AutoMode,
   FolderMapping,
   GitHubAuth,
+  LocalFileEntry,
   MappingDestination,
   PluginSettings,
   SyncDirection,
@@ -30,6 +31,9 @@ export interface MappingModalOptions {
    * can stay simple. */
   settings?: PluginSettings;
   pluginVersion?: string;
+  /** Passed through to DiagnoseModal; see DiagnoseModalOptions. */
+  scanLocalShas?: (mapping: FolderMapping) => Promise<Record<string, LocalFileEntry>>;
+  onPruneLocalOnly?: (mappingId: string) => void;
   onSave: (mapping: FolderMapping) => Promise<void>;
 }
 
@@ -371,6 +375,8 @@ export class EditMappingModal extends Modal {
         destination: dest,
         settings: this.opts.settings,
         pluginVersion: this.opts.pluginVersion,
+        scanLocalShas: this.opts.scanLocalShas,
+        onPruneLocalOnly: this.opts.onPruneLocalOnly,
       }).open();
     };
 
