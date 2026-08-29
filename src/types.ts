@@ -108,8 +108,11 @@ export interface SyncLogEntry {
   added: number;
   modified: number;
   deleted: number;
+  /** Add+delete pairs with identical content, reported as one move each.
+   * Absent on entries recorded before 1.9.0. */
+  moved?: number;
   conflicts: number;
-  /** Total files touched (added + modified + deleted). */
+  /** Total files touched (added + modified + deleted + moved). */
   filesTouched: number;
   /** First few changed paths for the expanded view. */
   changedPaths?: string[];
@@ -207,6 +210,10 @@ export interface SyncResult {
   added: number;
   modified: number;
   deleted: number;
+  /** Add+delete pairs with identical blob content, counted once per pair
+   * and excluded from `added`/`deleted`. changedPaths lists each as
+   * "from → to". */
+  moved?: number;
   conflicts: ConflictEntry[];
   commitSha?: string;
   error?: string;

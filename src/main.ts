@@ -918,8 +918,10 @@ export default class EasyGitPlugin extends Plugin {
       added: result.added,
       modified: result.modified,
       deleted: result.deleted,
+      moved: result.moved,
       conflicts: result.conflicts.length,
-      filesTouched: result.added + result.modified + result.deleted,
+      filesTouched:
+        result.added + result.modified + result.deleted + (result.moved ?? 0),
       changedPaths: result.changedPaths,
       error: result.error,
       durationMs: result.durationMs,
@@ -949,11 +951,13 @@ export default class EasyGitPlugin extends Plugin {
         }
       } else if (result.ok) {
         if (this.settings.showNotifications) {
-          const total = result.added + result.modified + result.deleted;
+          const total =
+            result.added + result.modified + result.deleted + (result.moved ?? 0);
           const summary =
             total === 0
               ? "up to date"
-              : `${result.added}+ ${result.modified}~ ${result.deleted}-`;
+              : `${result.added}+ ${result.modified}~ ${result.deleted}-` +
+                (result.moved ? ` ${result.moved}→` : "");
           new Notice(`Easy Git (${mapping.name}${label}): ${summary}`);
         }
         if (result.skippedLarge && result.skippedLarge.length > 0 && this.settings.showNotifications) {

@@ -562,7 +562,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
     new Setting(parent)
       .setName("Default commit message template")
       .setDesc(
-        "Tokens: {date}, {datetime}, {n}, {added}, {modified}, {deleted}, {files}, {vault}, {mapping}",
+        "Tokens: {date}, {datetime}, {n}, {added}, {modified}, {deleted}, {moved}, {files}, {vault}, {mapping}. With {moved} in the template, a move counts once (not as one add plus one delete) and {files} lists it as old → new.",
       )
       .addText((t) =>
         t

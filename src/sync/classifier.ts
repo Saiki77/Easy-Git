@@ -302,3 +302,80 @@ export function renameForConflict(path: string): string {
   }
   return `${path}-conflict-local-${stamp}`;
 }
+
+/** One detected move: the same blob content left `from` and appeared at `to`
+ * within a single run. */
+export interface MovePair {
+  from: string;
+  to: string;
+  /** Content blob SHA shared by both sides. */
+  sha: string;
+}
+
+export interface DetectedMoves {
+  push: MovePair[];
+  pull: MovePair[];
+}
+
+/**
+ * Pair add+delete actions that carry the same blob content into moves.
+ *
+ * A vault-side move surfaces as push-add(new path, localSha S) plus
+ * push-delete(old path, remoteSha S): the delete's remoteSha is the blob
+ * being removed, which for a pure move equals the content that reappears at
+ * the new path. A remote-side move symmetrically surfaces as pull-add(new,
+ * remoteSha S) plus pull-delete(old, localSha S).
+ *
+ * Pairing is 1:1 and greedy: adds are visited in path order, each consuming
+ * one same-SHA delete, preferring a delete with the same basename so
+ * "moved into a subfolder" pairs naturally even when several identical
+ * files move at once. Purely informational: callers use the pairs for the
+ * commit message, notices, and the sync log. Nothing about what is pushed
+ * or pulled changes.
+ */
+export function detectMoves(actions: FileAction[]): DetectedMoves {
+  return {
+    push: pairMoves(actions, "push-add", "push-delete"),
+    pull: pairMoves(actions, "pull-add", "pull-delete"),
+  };
+}
+
+function pairMoves(
+  actions: FileAction[],
+  addOp: FileAction["op"],
+  deleteOp: FileAction["op"],
+): MovePair[] {
+  const deletesBySha = new Map<string, FileAction[]>();
+  for (const a of actions) {
+    if (a.op !== deleteOp) continue;
+    const sha = a.localSha ?? a.remoteSha;
+    if (!sha) continue;
+    const list = deletesBySha.get(sha);
+    if (list) list.push(a);
+    else deletesBySha.set(sha, [a]);
+  }
+  if (deletesBySha.size === 0) return [];
+
+  const adds = actions
+    .filter((a) => a.op === addOp && (a.localSha ?? a.remoteSha))
+    .sort((x, y) => x.path.localeCompare(y.path));
+
+  const pairs: MovePair[] = [];
+  for (const add of adds) {
+    const sha = (add.localSha ?? add.remoteSha) as string;
+    const candidates = deletesBySha.get(sha);
+    if (!candidates || candidates.length === 0) continue;
+    const base = basenameOf(add.path);
+    let idx = candidates.findIndex((d) => basenameOf(d.path) === base);
+    if (idx < 0) idx = 0;
+    const del = candidates.splice(idx, 1)[0];
+    pairs.push({ from: del.path, to: add.path, sha });
+  }
+  pairs.sort((a, b) => a.from.localeCompare(b.from));
+  return pairs;
+}
+
+function basenameOf(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? p : p.slice(i + 1);
+}

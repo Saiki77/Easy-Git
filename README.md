@@ -24,7 +24,7 @@ Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where
 
 ## Sync providers
 
-Easy Git started life as a GitHub plugin and now also syncs to self-hosted **Forgejo / Gitea** instances. Pick the provider under **Settings → Easy Git → Authentication**; everything else (mappings, directions, conflict handling, backups, the markdown transforms) works the same no matter where your repos live.
+Easy Git started life as a GitHub plugin and now also syncs to self-hosted **Forgejo / Gitea** instances. Pick the provider under **Settings → Easy Git → Authentication**; everything else (mappings, directions, conflict handling, backups, the markdown transforms) works the same no matter where your repos live. On Forgejo/Gitea 1.18+ each sync lands as one atomic commit through the batch contents API, so the server renders moved files as renames; older servers fall back to one commit per file.
 
 Whatever the provider, Easy Git holds to the same simple spirit:
 
@@ -257,7 +257,7 @@ Every sync run is recorded in an in-Obsidian log so you can see exactly what hap
 - The **View sync log** button next to **+ Add mapping** in settings, or
 - The command palette: `Easy Git: Show sync log`
 
-Each entry shows the mapping and destination, when it ran, the trigger (manual, interval, startup, on-save, command, prune), the duration, and the outcome. Successful runs list the files added, modified, or deleted. Failed runs surface the full error including the vault path that caused it. The log keeps the most recent 100 entries and can be cleared from the log modal.
+Each entry shows the mapping and destination, when it ran, the trigger (manual, interval, startup, on-save, command, prune), the duration, and the outcome. Successful runs list the files added, modified, or deleted. A move (the same content deleted at one path and added at another within a run) is reported once as `old → new` and counted separately, both here and in the post-sync notice. Failed runs surface the full error including the vault path that caused it. The log keeps the most recent 100 entries and can be cleared from the log modal.
 
 If a sync errors with `File already exists at "Notes/Foo.md"` (or similar), that's a case-insensitive filename collision: the remote has one casing and your vault has another. Easy Git tries to recover automatically by writing the new content to the existing file regardless of case; the error only surfaces if recovery itself fails.
 

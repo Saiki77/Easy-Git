@@ -512,3 +512,36 @@ export async function updateRef(
     throw e;
   }
 }
+
+/** One file operation inside a batch contents commit. */
+export interface BatchFileOperation {
+  operation: "create" | "update" | "delete";
+  path: string;
+  /** Base64 content; required for create and update. */
+  content?: string;
+  /** Current blob SHA; required for update and delete. */
+  sha?: string;
+}
+
+/**
+ * Change multiple files in ONE commit via Gitea/Forgejo's batch contents
+ * API (POST /repos/{owner}/{repo}/contents, Gitea 1.18+ and every
+ * Forgejo release). Returns the new commit SHA. Servers that predate the
+ * endpoint answer 404/405; callers detect that and fall back to the
+ * per-file contents calls.
+ */
+export async function changeFilesBatch(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  branch: string,
+  message: string,
+  files: BatchFileOperation[],
+): Promise<string> {
+  const data = await client.request<{ commit: { sha: string } }>(
+    "POST",
+    `/repos/${owner}/${repo}/contents`,
+    { branch, message, files },
+  );
+  return data.commit.sha;
+}

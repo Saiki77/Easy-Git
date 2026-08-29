@@ -15,7 +15,9 @@ import {
 } from "../types";
 import { GitHubClient, GitHubApiError } from "../github/client";
 import {
+  BatchFileOperation,
   NewTreeEntry,
+  changeFilesBatch,
   createBlob,
   createCommit,
   createTree,
@@ -35,8 +37,10 @@ import {
   isLikelyTextPath,
 } from "./blob-sha";
 import {
+  MovePair,
   ResolvedConflictPlan,
   classify,
+  detectMoves,
   planFromResolvedConflicts,
   renameForConflict,
 } from "./classifier";
@@ -82,6 +86,10 @@ export interface SyncEngineDeps {
 }
 
 const MAX_NON_FF_RETRIES = 3;
+
+/** Sentinel returned by tryPushViaBatchContents when the server lacks the
+ * batch contents endpoint, so any real commit SHA stays a plain string. */
+const BATCH_UNSUPPORTED = Symbol("batch-unsupported");
 
 export class SyncEngine {
   constructor(private deps: SyncEngineDeps) {}
@@ -388,6 +396,11 @@ export class SyncEngine {
 
     const actions = [...plan.actions, ...conflictPlan.extraActions];
 
+    // Purely informational: pair add+delete actions that share a blob SHA
+    // into moves for the commit message, notices, and the sync log. What
+    // gets pushed or pulled does not change.
+    const moves = detectMoves(actions);
+
     // 7. Apply pull-side actions. Before any operation that destroys local
     // content (pull-modify of an existing file, pull-delete), back the file
     // up to .easy-git-backup/<timestamp>/<original-path>. Applies to every
@@ -446,6 +459,7 @@ export class SyncEngine {
           localScan.files,
           remote,
           head.commitSha,
+          moves.push,
         );
         if (sha === null) {
           // Non-fast-forward: someone pushed during our run.
@@ -461,6 +475,7 @@ export class SyncEngine {
           head.treeSha,
           pushActions,
           localScan.files,
+          moves.push,
         );
         if (commitResult === null) {
           // Non-fast-forward: someone pushed during our run.
@@ -484,15 +499,27 @@ export class SyncEngine {
     destination.lastSyncError = undefined;
     await this.deps.saveSettings();
 
-    // 10. Counts for the result.
+    // 10. Counts for the result. Move pairs are reported once, as
+    // "from → to", instead of as one add plus one delete.
+    const movePairs = [...moves.push, ...moves.pull];
+    const movedPaths = new Set<string>();
+    for (const p of movePairs) {
+      movedPaths.add(p.from);
+      movedPaths.add(p.to);
+    }
     const changedPaths: string[] = [];
     for (const a of actions) {
       if (a.op === "noop") continue;
+      if (movedPaths.has(a.path)) continue;
       changedPaths.push(a.path);
       if (a.op === "push-add" || a.op === "pull-add") baseResult.added += 1;
       else if (a.op === "push-modify" || a.op === "pull-modify") baseResult.modified += 1;
       else if (a.op === "push-delete" || a.op === "pull-delete") baseResult.deleted += 1;
     }
+    for (const p of movePairs) {
+      changedPaths.push(`${p.from} → ${p.to}`);
+    }
+    if (movePairs.length > 0) baseResult.moved = movePairs.length;
     baseResult.commitSha = newCommitSha;
     baseResult.conflicts = plan.conflicts.map((c) => ({ ...c }));
     baseResult.changedPaths = changedPaths;
@@ -523,6 +550,12 @@ export class SyncEngine {
    */
   private rewriteContentCache: Map<string, string> = new Map();
   private attachmentSourceMap: Map<string, string> = new Map();
+
+  /** Whether this Forgejo/Gitea server supports the batch contents API
+   * (POST /repos/{owner}/{repo}/contents, Gitea 1.18+). Undefined until
+   * the first push attempt; latched false after a 404/405 so older
+   * servers skip the probe on subsequent syncs this session. */
+  private forgejoBatchSupported: boolean | undefined;
 
   private async scanLocalFolder(
     mapping: FolderMapping,
@@ -1172,17 +1205,127 @@ export class SyncEngine {
   }
 
   /**
-   * Push files to Forgejo via the contents API (PUT/DELETE /contents/{path}).
-   * Used instead of buildAndPushCommit because Forgejo does not implement the
-   * Git Data write endpoints. Produces one commit per changed file.
+   * One batch-contents call: every push action lands in a single commit,
+   * with the same templated message the GitHub path uses. Because a move
+   * is then a delete and a create in ONE commit, Forgejo/Gitea diff views
+   * render it as a rename ("old → new") instead of a deletion plus a new
+   * file in separate commits.
+   *
+   * Returns the commit SHA, "" when there was nothing to send, null to
+   * signal a non-fast-forward retry, or "unsupported" when the server
+   * predates the endpoint and the caller should use per-file commits.
+   */
+  private async tryPushViaBatchContents(
+    client: GitHubClient,
+    mapping: FolderMapping,
+    destination: MappingDestination,
+    pushActions: FileAction[],
+    remote: Record<string, RemoteFileEntry>,
+    baseCommitSha: string,
+    movePairs: MovePair[],
+  ): Promise<string | null | typeof BATCH_UNSUPPORTED> {
+    const files: BatchFileOperation[] = [];
+    let added = 0,
+      modified = 0,
+      deleted = 0;
+    const changedFiles: string[] = [];
+
+    for (const action of pushActions) {
+      const fullRepoPath = repoPathFor(destination, action.path);
+      if (action.op === "push-delete") {
+        const existingSha = remote[action.path]?.sha;
+        if (!existingSha) continue;
+        files.push({ operation: "delete", path: fullRepoPath, sha: existingSha });
+        deleted += 1;
+      } else {
+        const content = await this.readVaultFile(mapping, action.path);
+        const existingSha =
+          action.op === "push-modify" ? remote[action.path]?.sha : undefined;
+        if (existingSha) {
+          files.push({
+            operation: "update",
+            path: fullRepoPath,
+            content: content.base64,
+            sha: existingSha,
+          });
+          modified += 1;
+        } else {
+          files.push({
+            operation: "create",
+            path: fullRepoPath,
+            content: content.base64,
+          });
+          added += 1;
+        }
+      }
+      changedFiles.push(action.path);
+    }
+    if (files.length === 0) return "";
+
+    const template =
+      mapping.commitTemplate ?? this.deps.settings.defaultCommitTemplate;
+    const message = formatCommitMessage(template, {
+      mappingName: mapping.name,
+      vaultName: this.deps.app.vault.getName(),
+      added,
+      modified,
+      deleted,
+      files: changedFiles,
+      moved: movePairs,
+    });
+
+    try {
+      const sha = await changeFilesBatch(
+        client,
+        destination.repoOwner,
+        destination.repoName,
+        destination.branch,
+        message,
+        files,
+      );
+      this.forgejoBatchSupported = true;
+      return sha;
+    } catch (e) {
+      if (e instanceof GitHubApiError) {
+        if (e.status === 404 || e.status === 405) {
+          // Endpoint absent on this server (or the repo vanished mid-run;
+          // then the per-file fallback surfaces the real error anyway).
+          this.forgejoBatchSupported = false;
+          return BATCH_UNSUPPORTED;
+        }
+        if (e.status === 409 || e.status === 422) {
+          const fresh = await getBranchHead(
+            client,
+            destination.repoOwner,
+            destination.repoName,
+            destination.branch,
+          );
+          if (fresh.commitSha && fresh.commitSha !== baseCommitSha) {
+            // Branch moved under us: signal the normal non-FF retry.
+            return null;
+          }
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Push files to Forgejo/Gitea via the contents API. Used instead of
+   * buildAndPushCommit because those servers do not implement the Git
+   * Data write endpoints.
+   *
+   * Preferred shape: one batch call producing a single atomic commit (see
+   * tryPushViaBatchContents). Servers without the batch endpoint fall
+   * back to one commit per file (PUT/POST/DELETE /contents/{path}); that
+   * fallback is not atomic, and a failure partway leaves the
+   * already-written files committed. The next sync reconciles them as
+   * no-ops (local SHA matches the new remote SHA), so no data is lost
+   * either way.
    *
    * Returns the SHA of the last commit created, "" if no actions ran, or null
    * if a write was rejected because the branch moved under us (non-fast-forward)
    * so the caller can re-pin head and retry, mirroring the GitHub path.
-   *
-   * Note: because each file is its own commit, a push is not atomic. A failure
-   * partway leaves the already-written files committed; the next sync reconciles
-   * them as no-ops (local SHA matches the new remote SHA), so no data is lost.
    */
   private async pushViaContentsApi(
     client: GitHubClient,
@@ -1192,7 +1335,21 @@ export class SyncEngine {
     localFiles: Record<string, LocalFileEntry>,
     remote: Record<string, RemoteFileEntry>,
     baseCommitSha: string,
+    movePairs: MovePair[],
   ): Promise<string | null> {
+    if (this.forgejoBatchSupported !== false) {
+      const batch = await this.tryPushViaBatchContents(
+        client,
+        mapping,
+        destination,
+        pushActions,
+        remote,
+        baseCommitSha,
+        movePairs,
+      );
+      if (batch !== BATCH_UNSUPPORTED) return batch;
+    }
+
     let lastCommitSha = "";
     // The commit the branch is expected to be at before each write: starts at
     // the pinned head and advances to every commit we create, so a conflict can
@@ -1264,6 +1421,7 @@ export class SyncEngine {
     baseTreeSha: string,
     pushActions: FileAction[],
     localFiles: Record<string, LocalFileEntry>,
+    movePairs: MovePair[],
   ): Promise<string | null> {
     const treeEntries: NewTreeEntry[] = [];
     let added = 0,
@@ -1319,6 +1477,7 @@ export class SyncEngine {
       modified,
       deleted,
       files: changedFiles,
+      moved: movePairs,
     });
     const newCommitSha = await createCommit(
       client,

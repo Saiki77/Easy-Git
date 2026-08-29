@@ -69,7 +69,8 @@ export class SyncLogModal extends Modal {
     const summaryText = entry.ok
       ? entry.filesTouched === 0
         ? "up to date"
-        : `${entry.added}+ ${entry.modified}~ ${entry.deleted}-`
+        : `${entry.added}+ ${entry.modified}~ ${entry.deleted}-` +
+          (entry.moved ? ` ${entry.moved}→` : "")
       : "error";
     header.createSpan({ cls: "easy-git-log-summary", text: summaryText });
 
