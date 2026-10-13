@@ -685,11 +685,11 @@ export default class EasyGitPlugin extends Plugin {
     this.settingsTab?.refreshSyncStates();
     try {
       if (this.settings.debugLogging) {
-        console.log(`[Easy Git] sync start (${trigger}) — ${mapping.name}`);
+        console.debug(`[Easy Git] sync start (${trigger}) — ${mapping.name}`);
       }
       const results = await this.engine.syncMapping(mapping);
       if (this.settings.debugLogging) {
-        console.log(`[Easy Git] sync results`, results);
+        console.debug(`[Easy Git] sync results`, results);
       }
       for (const r of results) this.recordSyncResult(mapping, r, trigger);
       await this.saveSettings();
