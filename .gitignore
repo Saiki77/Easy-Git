@@ -6,3 +6,9 @@ node_modules/
 .env.local
 .vscode/
 .idea/
+
+# Local Claude Code working files — task tracking and repo-specific agent
+# config. Never part of this project's shared history (see Code Github/CLAUDE.md).
+CLAUDE.md
+.claude/
+docs/tasks/

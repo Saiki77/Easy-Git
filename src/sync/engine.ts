@@ -219,7 +219,7 @@ export class SyncEngine {
       remoteScan.correctedPath !== destination.remoteFolder
     ) {
       if (this.deps.settings.debugLogging) {
-        console.log(
+        console.debug(
           `Easy Git: remote folder case auto-corrected ` +
             `"${destination.remoteFolder}" → "${remoteScan.correctedPath}" ` +
             `(${destination.repoOwner}/${destination.repoName})`,
@@ -237,7 +237,7 @@ export class SyncEngine {
       );
     }
     if (this.deps.settings.debugLogging) {
-      console.log(
+      console.debug(
         `Easy Git: remote scan for ${destination.repoOwner}/${destination.repoName}` +
           `:${destination.branch}/${destination.remoteFolder || "/"} → ` +
           `${Object.keys(remote).length} files at commit ${head.commitSha.slice(0, 7)}`,

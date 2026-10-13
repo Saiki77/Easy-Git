@@ -13,6 +13,9 @@ const ctx = await esbuild.context({
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   minify: prod,
+  // Drop only console.debug in production (dev-logging) builds; console.error
+  // stays so genuine failures (e.g. corrupted settings) still surface.
+  pure: prod ? ["console.debug"] : [],
   logLevel: "info",
 });
 
