@@ -52,8 +52,8 @@ If you'd like Easy Git to reach another host such as GitLab, Bitbucket, or a dif
 
 Either works for private repos.
 
-- **Personal Access Token.** Create one at [github.com/settings/tokens](https://github.com/settings/tokens) with the `repo` scope (or a fine-grained token with `Contents: Read and write` + `Metadata: Read`), paste it in settings, hit **Test connection**.
-- **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically.
+- **Fine-grained Personal Access Token (recommended).** The only method that can be limited to exactly the repos you sync. Create one at [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens), choose **Only select repositories**, and grant `Contents: Read and write` (the required `Metadata: Read` is added automatically). Paste it in settings, hit **Test connection**. The repo picker then lists only the repos the token can reach. Classic tokens with the `repo` scope keep working.
+- **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically. One caveat: this is a classic OAuth flow, and GitHub offers no per-repository scope for it, so the token can access every repo on your account. If that is too broad, use a fine-grained token instead; converting the sign-in to a GitHub App (which supports per-repo installation) is under consideration.
 
 **Where your token lives.** On Obsidian 1.11.4 and newer, Easy Git stores it in your operating system's keychain rather than in the plugin's settings file, so it never travels with the vault and other plugins can't read it. That also means it is per device: if you use the same vault on a laptop and a phone, sign in once on each. Older Obsidian builds keep the token in `data.json` as before. An existing token is moved into the keychain automatically the first time you run this version.
 
