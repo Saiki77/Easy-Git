@@ -212,12 +212,12 @@ export class EasyGitSettingTab extends PluginSettingTab {
       .setName("Personal access token")
       .setDesc(
         isGitHub
-          ? "Paste a token with the `repo` scope. Create one at github.com/settings/tokens (fine-grained tokens with content read/write also work)."
+          ? "Recommended: a fine-grained token limited to just your sync repos. Create one at github.com/settings/personal-access-tokens with \"Only select repositories\" and the permission Contents: Read and write. Classic tokens with the `repo` scope work too."
           : "Paste a token from your Forgejo instance (User settings → Applications → Access tokens). Needs repository read/write access.",
       )
       .addText((t) => {
         t.inputEl.type = "password";
-        t.setPlaceholder(isGitHub ? "ghp_..." : "Forgejo token")
+        t.setPlaceholder(isGitHub ? "github_pat_... or ghp_..." : "Forgejo token")
           .setValue(auth.method === "pat" ? auth.token : "")
           .onChange(async (v) => {
             this.plugin.settings.auth = {
@@ -235,7 +235,7 @@ export class EasyGitSettingTab extends PluginSettingTab {
       new Setting(parent)
         .setName("Sign in with GitHub (Device Flow)")
         .setDesc(
-          "Open a one-time code in your browser. Easier than copying a PAT. Requires the plugin's OAuth App client_id to be configured.",
+          "Open a one-time code in your browser. Easier than copying a PAT, but the resulting token can access every repo on your account (GitHub OAuth has no per-repo scope). Use a fine-grained token above to limit access to selected repos.",
         )
         .addButton((b) =>
           b
