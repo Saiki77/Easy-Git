@@ -961,10 +961,20 @@ export class SyncEngine {
       ? ""
       : mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
     const path = folder ? `${folder}/.easygitignore` : ".easygitignore";
-    const file = this.deps.app.vault.getFileByPath(path);
-    if (!file) return [];
     try {
-      const text = await this.deps.app.vault.read(file);
+      // The vault layer hides dotfiles: getFileByPath() returns null for
+      // them, so on current Obsidian builds only the adapter branch below
+      // ever reads the file. The vault lookup stays first as the indexed
+      // fast path in case Obsidian surfaces dotfiles one day — same
+      // pattern as backupVaultFile and the v1.4.9 dotfile handling.
+      const file = this.deps.app.vault.getFileByPath(path);
+      if (file) {
+        const text = await this.deps.app.vault.read(file);
+        return text.split(/\r?\n/);
+      }
+      const adapter = this.deps.app.vault.adapter;
+      if (!(await adapter.exists(path))) return [];
+      const text = await adapter.read(path);
       return text.split(/\r?\n/);
     } catch {
       return [];
