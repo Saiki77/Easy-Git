@@ -257,11 +257,19 @@ function isNestedBlockquote(line: string): boolean {
 // Push: ==X== → <mark>X</mark>. Requires non-`=` neighbours (so we don't
 // match inside `===`), non-whitespace at the inner edges (so `== loose ==`
 // doesn't match), and no newline in the content.
-const HIGHLIGHT_PUSH_RE = /(?<!=)==(?=\S)([^\n=]+?[^=\s])==(?!=)/g;
+//
+// The leading non-`=` guard is a CONSUMED `(^|[^=])` prefix group, not a
+// lookbehind. WebKit before 16.4 cannot parse lookbehind, and a regex
+// literal is a parse-time SyntaxError, so a single `(?<!=)` kills the whole
+// plugin bundle on those iOS builds. Do not "simplify" this back to
+// `(?<!=)`. Every replacement must re-emit the captured prefix char.
+// tests/markdown-transforms.test.ts proves the segmentation byte-identical
+// to the lookbehind form, exhaustively over short inputs.
+export const HIGHLIGHT_PUSH_RE = /(^|[^=])==(?=\S)([^\n=]+?[^=\s])==(?!=)/g;
 
 // Single-edge content version (matches `==a==` where content is one
 // non-whitespace, non-= char).
-const HIGHLIGHT_PUSH_SINGLE_RE = /(?<!=)==([^\n=\s])==(?!=)/g;
+export const HIGHLIGHT_PUSH_SINGLE_RE = /(^|[^=])==([^\n=\s])==(?!=)/g;
 
 const HIGHLIGHT_PULL_RE = /<mark>([^\n]+?)<\/mark>/g;
 
@@ -279,13 +287,13 @@ export function rewriteHighlightsForPush(prose: string): {
       continue;
     }
     const after = r.text
-      .replace(HIGHLIGHT_PUSH_RE, (_, inner) => {
+      .replace(HIGHLIGHT_PUSH_RE, (_, prefix: string, inner: string) => {
         count++;
-        return `<mark>${inner}</mark>`;
+        return `${prefix}<mark>${inner}</mark>`;
       })
-      .replace(HIGHLIGHT_PUSH_SINGLE_RE, (_, inner) => {
+      .replace(HIGHLIGHT_PUSH_SINGLE_RE, (_, prefix: string, inner: string) => {
         count++;
-        return `<mark>${inner}</mark>`;
+        return `${prefix}<mark>${inner}</mark>`;
       });
     out.push(after);
   }

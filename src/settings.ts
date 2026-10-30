@@ -684,7 +684,8 @@ function summarizeMapping(m: FolderMapping): string {
   const remoteFolder = first.remoteFolder || "/";
   const head = `${first.repoOwner}/${first.repoName}:${first.branch}/${remoteFolder}`;
   const more = destinations.length > 1 ? `  +${destinations.length - 1} more` : "";
-  return `${vault} ↔ ${head}${more}${raw}`;
+  const lock = destinations.some((d) => d.encryption) ? "  🔒 encrypted" : "";
+  return `${vault} ↔ ${head}${more}${lock}${raw}`;
 }
 
 function isVaultRootFolder(vaultFolder: string): boolean {

@@ -25,7 +25,7 @@ import { SyncLogModal } from "./ui/sync-log-modal";
 import { EasyGitSettingTab } from "./settings";
 import { SyncEngine } from "./sync/engine";
 import { ConflictResolutionModal } from "./ui/conflict-modal";
-import { MappingNameSuggest } from "./ui/pickers";
+import { DestinationChoice, DestinationSuggest, MappingNameSuggest } from "./ui/pickers";
 import { PruneLocalModal } from "./ui/prune-modal";
 import { PruneResult } from "./sync/reconcile";
 import { StatusBarIndicator, StatusState } from "./ui/status-bar";
@@ -35,6 +35,19 @@ import {
   secretStorageAvailable,
   writeStoredToken,
 } from "./secret-storage";
+import { EncryptionKeychain } from "./crypto/keychain";
+import {
+  provisionEncryption,
+  unlockWithPassphrase,
+  unlockWithRecoveryKey,
+} from "./crypto/provision";
+import { EncryptionMetadataFile } from "./crypto/metadata";
+import { bytesToBase64 } from "./sync/blob-sha";
+import { ConfirmModal } from "./ui/confirm-modal";
+import {
+  EncryptionSetupModal,
+  EncryptionUnlockModal,
+} from "./ui/encryption-modals";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
@@ -55,6 +68,7 @@ export default class EasyGitPlugin extends Plugin {
   // would shadow it. Assigned in loadSettings().
   declare settings: PluginSettings;
   private engine!: SyncEngine;
+  private keychain!: EncryptionKeychain;
   private intervalHandles: Map<string, number> = new Map();
   private onSaveDebouncers: Map<string, MappingDebouncer> = new Map();
   private modifyListener?: EventRef;
@@ -72,6 +86,14 @@ export default class EasyGitPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    // Constructed before loadSettings: its closures read this.settings
+    // lazily, and loadSettings uses it to promote fallback keys.
+    this.keychain = new EncryptionKeychain(
+      this.app,
+      () => this.settings,
+      () => this.saveSettings(),
+    );
+
     await this.loadSettings();
 
     this.engine = new SyncEngine({
@@ -82,6 +104,7 @@ export default class EasyGitPlugin extends Plugin {
       saveSettings: () => this.saveSettings(),
       resolveConflicts: (mapping, destination, conflicts) =>
         this.openConflictModal(mapping, destination, conflicts),
+      resolveEncryptionKeys: (keyId) => this.keychain.resolve(keyId),
     });
 
     this.settingsTab = new EasyGitSettingTab(this.app, this);
@@ -149,6 +172,42 @@ export default class EasyGitPlugin extends Plugin {
       id: "prune-local-only",
       name: "Prune local-only files… (remove vault files that are not on remote)",
       callback: () => this.pickMappingToPrune(),
+    });
+
+    this.addCommand({
+      id: "encryption-setup",
+      name: "Set up end-to-end encryption for a destination…",
+      callback: () => {
+        this.pickEncryptionDestination(
+          "Encrypt which destination?",
+          (d) => !d.encryption,
+          (m, d) => this.startEncryptionSetup(m, d),
+        );
+      },
+    });
+
+    this.addCommand({
+      id: "encryption-unlock",
+      name: "Unlock encrypted destination… (enter passphrase on this device)",
+      callback: () => {
+        this.pickEncryptionDestination(
+          "Unlock which destination?",
+          () => true,
+          (m, d) => void this.startEncryptionUnlock(m, d),
+        );
+      },
+    });
+
+    this.addCommand({
+      id: "encryption-disable",
+      name: "Disable encryption for a destination… (push plaintext again)",
+      callback: () => {
+        this.pickEncryptionDestination(
+          "Disable encryption for which destination?",
+          (d) => !!d.encryption,
+          (m, d) => this.startEncryptionDisable(m, d),
+        );
+      },
     });
 
     // Status bar indicator — shows aggregate sync state, clicks to open settings.
@@ -270,6 +329,7 @@ export default class EasyGitPlugin extends Plugin {
     // without a token. The token is not in data.json anymore, so it has to be
     // back in memory by then.
     if (this.hydrateToken()) dirty = true;
+    if (this.keychain.promoteFallbackKeys()) dirty = true;
     if (this.migrateLegacyMappings()) dirty = true;
     if (this.healSettings()) dirty = true;
     if (dirty) await this.saveSettings();
@@ -522,6 +582,13 @@ export default class EasyGitPlugin extends Plugin {
         const remoteNorm = d.remoteFolder.replace(/^\/+|\/+$/g, "");
         if (remoteNorm !== d.remoteFolder) {
           d.remoteFolder = remoteNorm;
+          dirty = true;
+        }
+        // A hand-edited or corrupted encryption block is dropped; the key
+        // itself is untouched, and Unlock restores the link from the
+        // remote metadata file.
+        if (d.encryption && !/^[0-9a-f]{32}$/.test(String(d.encryption.keyId))) {
+          delete d.encryption;
           dirty = true;
         }
       }
@@ -840,6 +907,165 @@ export default class EasyGitPlugin extends Plugin {
     new Notice(`Easy Git (${mapping.name}): ${parts.join(", ")}.`, 8000);
   }
 
+  // -------------------------------------------------------------------
+  // End-to-end encryption commands
+  // -------------------------------------------------------------------
+
+  /** Flat picker over every (mapping, destination) pair passing `filter`.
+   * One step even for multi-destination mappings — the label carries both
+   * names. */
+  private pickEncryptionDestination(
+    placeholder: string,
+    filter: (d: MappingDestination) => boolean,
+    onChoose: (mapping: FolderMapping, destination: MappingDestination) => void,
+  ): void {
+    if (this.settings.auth.method === "none" || !this.settings.auth.token) {
+      new Notice("Easy Git: sign in first (settings), then set up encryption.");
+      return;
+    }
+    const choices: DestinationChoice[] = [];
+    for (const mapping of this.settings.mappings) {
+      for (const destination of mapping.destinations ?? []) {
+        if (!destination.repoOwner || !destination.repoName || !destination.branch) continue;
+        if (!filter(destination)) continue;
+        const lock = destination.encryption ? " 🔒" : "";
+        choices.push({
+          mapping,
+          destination,
+          label: `${mapping.name} → ${destinationLabel(destination)}${lock}`,
+        });
+      }
+    }
+    if (choices.length === 0) {
+      new Notice("Easy Git: no matching destinations.");
+      return;
+    }
+    new DestinationSuggest(this.app, choices, placeholder, (c) =>
+      onChoose(c.mapping, c.destination),
+    ).open();
+  }
+
+  private startEncryptionSetup(
+    mapping: FolderMapping,
+    destination: MappingDestination,
+  ): void {
+    if (this.syncing.has(mapping.id)) {
+      new Notice(`Easy Git: "${mapping.name}" is syncing. Try again when it finishes.`);
+      return;
+    }
+    const hasRemoteHistory =
+      !!destination.lastSyncState &&
+      Object.keys(destination.lastSyncState.files).length > 0;
+    new EncryptionSetupModal(this.app, {
+      destinationLabel: destinationLabel(destination),
+      hasRemoteHistory,
+      onProvision: async (passphrase) => {
+        const result = await provisionEncryption(passphrase);
+        await this.keychain.store(result.meta.keyId, result.masterKey);
+        this.settings.encryptionMeta = {
+          ...(this.settings.encryptionMeta ?? {}),
+          [result.meta.keyId]: result.meta,
+        };
+        destination.encryption = { keyId: result.meta.keyId };
+        destination.pendingCryptoMetaRemoval = undefined;
+        await this.saveSettings();
+        return bytesToBase64(result.masterKey);
+      },
+      onDone: () => {
+        new Notice(
+          `Easy Git (${mapping.name}): encryption enabled. Syncing now; every file is re-uploaded encrypted.`,
+          8000,
+        );
+        void this.syncMapping(mapping.id, "command");
+      },
+    }).open();
+  }
+
+  private async startEncryptionUnlock(
+    mapping: FolderMapping,
+    destination: MappingDestination,
+  ): Promise<void> {
+    let meta: EncryptionMetadataFile | null = null;
+    let fromRemote = true;
+    try {
+      meta = await this.engine.fetchRemoteCryptoMetadata(destination);
+    } catch (e) {
+      new Notice(
+        `Easy Git: could not read the remote encryption metadata: ${e instanceof Error ? e.message : String(e)}`,
+        8000,
+      );
+      return;
+    }
+    if (!meta && destination.encryption) {
+      // Remote file not uploaded yet (interrupted enable): unlock against
+      // the device-local mirror so the next sync can finish the upload.
+      meta = this.settings.encryptionMeta?.[destination.encryption.keyId] ?? null;
+      fromRemote = false;
+    }
+    if (!meta) {
+      new Notice(
+        "Easy Git: this destination has no encryption metadata on the remote. Use " +
+          '"Set up end-to-end encryption" instead.',
+        8000,
+      );
+      return;
+    }
+    const metaFile = meta;
+    new EncryptionUnlockModal(this.app, {
+      destinationLabel: destinationLabel(destination),
+      onUnlock: async (secret, useRecoveryKey) => {
+        const unlocked = useRecoveryKey
+          ? await unlockWithRecoveryKey(metaFile, secret)
+          : await unlockWithPassphrase(metaFile, secret);
+        await this.keychain.store(metaFile.keyId, unlocked.masterKey);
+        this.settings.encryptionMeta = {
+          ...(this.settings.encryptionMeta ?? {}),
+          [metaFile.keyId]: metaFile,
+        };
+        destination.encryption = {
+          keyId: metaFile.keyId,
+          metaUploaded: fromRemote ? true : destination.encryption?.metaUploaded,
+        };
+        destination.pendingCryptoMetaRemoval = undefined;
+        await this.saveSettings();
+      },
+      onDone: () => {
+        new Notice(`Easy Git (${mapping.name}): destination unlocked. Syncing now.`);
+        void this.syncMapping(mapping.id, "command");
+      },
+    }).open();
+  }
+
+  private startEncryptionDisable(
+    mapping: FolderMapping,
+    destination: MappingDestination,
+  ): void {
+    if (this.syncing.has(mapping.id)) {
+      new Notice(`Easy Git: "${mapping.name}" is syncing. Try again when it finishes.`);
+      return;
+    }
+    new ConfirmModal(this.app, {
+      title: "Disable end-to-end encryption?",
+      message:
+        `The next sync re-uploads every file of "${destinationLabel(destination)}" as readable ` +
+        "plaintext and removes the encryption metadata file. Anyone with repo access can then " +
+        "read the content (encrypted versions remain in git history). The key stays on this " +
+        "device. If other devices pushed recently, sync once before disabling.",
+      confirmText: "Disable and Push Plaintext",
+      destructive: true,
+      onConfirm: async () => {
+        destination.encryption = undefined;
+        destination.pendingCryptoMetaRemoval = true;
+        await this.saveSettings();
+        new Notice(
+          `Easy Git (${mapping.name}): encryption disabled. Syncing now; files are re-uploaded as plaintext.`,
+          8000,
+        );
+        void this.syncMapping(mapping.id, "command");
+      },
+    }).open();
+  }
+
   /**
    * Mark a mapping busy for the duration of `fn`, exactly like a sync run:
    * the settings row and status bar show it, and auto-sync triggers that
@@ -1002,6 +1228,16 @@ export default class EasyGitPlugin extends Plugin {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.mergedConflicts} conflict(s) merged automatically via 3-way diff.`,
             6000,
+          );
+        }
+        if (
+          result.plaintextRemoteFiles &&
+          result.plaintextRemoteFiles > 0 &&
+          this.settings.showNotifications
+        ) {
+          new Notice(
+            `Easy Git (${mapping.name}${label}): ${result.plaintextRemoteFiles} remote file(s) were not encrypted and were pulled as-is. The next sync re-uploads them encrypted.`,
+            8000,
           );
         }
         if (

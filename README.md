@@ -216,6 +216,24 @@ If a backup write itself fails (disk full, permission error, etc.), the sync abo
 
 Backups can be auto-pruned. Open **Settings → Easy Git → Backups** and set "Auto-prune backups older than (days)" to anything above 0 — the engine deletes timestamped subfolders past that window at the end of each sync. Leave it at 0 to keep every snapshot forever (the default for existing installs).
 
+## End-to-end encryption (optional)
+
+Any destination can be end-to-end encrypted. File contents are encrypted with AES-256-GCM on your device before upload and decrypted after download, so the repo host (GitHub, or your Forgejo server) only ever stores ciphertext. Off by default; destinations without it behave exactly as before, byte for byte.
+
+**Enable:** run `Easy Git: Set up end-to-end encryption for a destination…`, pick the destination, choose a passphrase, and store the recovery key it shows you (a password manager or a printout; anywhere outside the vault). The next sync re-uploads every file encrypted in one commit.
+
+**Other devices:** configure the same mapping there, then run `Easy Git: Unlock encrypted destination…` and enter the passphrase once. The repo itself carries a small public file, `.easy-git-crypto.json`, with the salt and the passphrase-wrapped key, which is everything another device needs; the passphrase never leaves any device. A sync against an encrypted folder that has not been unlocked stops with a clear error instead of pulling unreadable bytes.
+
+**Disable:** `Easy Git: Disable encryption for a destination…` re-uploads everything as plaintext and removes the metadata file.
+
+What to know before enabling:
+
+- **What is hidden:** file contents, including every future edit, with per-file tamper detection. **What is not:** file and folder names, sizes, edit timing, and commit messages. Encryption is content-only by design.
+- **Losing the passphrase AND the recovery key means the remote copy is unreadable forever.** There is no server-side reset. Keys live in the OS keystore (Obsidian 1.11.4+); older builds fall back to the plugin's `data.json`.
+- **Git history is not rewritten.** Enabling encryption on a destination that already synced leaves the earlier plaintext versions in history. For a fully private repo, start a fresh repo or branch and enable encryption before the first sync.
+- Identical content produces identical ciphertext (that is what keeps sync, move detection, and conflict handling working), so an observer can tell when a file returned to an earlier state or two files match. GitHub's own rendering, diffs, and the wikilink/Markdown rewrites are meaningless on an encrypted destination, since the remote is not human-readable there anyway.
+- Everything else works unchanged: conflict resolution and 3-way merges run on the decrypted text, backups are taken as usual, and one atomic commit per sync still holds.
+
 ## Pruning local-only files
 
 Pull-only keeps local-only files on purpose, but that also keeps the stale half of a move or rename that happened on remote. When files are reorganised directly on GitHub (by a collaborator, a script, or an AI agent), the new paths are pulled while the old ones stay in your vault, because nothing in the vault says they were ever on remote. `Easy Git: Prune local-only files…` is the explicit clean-up for that case:

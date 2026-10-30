@@ -86,3 +86,40 @@ export function writeStoredToken(app: App, token: string): boolean {
 export function clearStoredToken(app: App): void {
   writeStoredToken(app, "");
 }
+
+/**
+ * Encryption master keys, one secret per key id. Key ids are 32 lowercase
+ * hex characters, so the composed id always satisfies setSecret()'s
+ * charset. Same failure contract as the token functions: read failures
+ * return null, write failures return false, and callers keep the key in
+ * the data.json fallback rather than dropping it.
+ */
+function keySecretId(keyId: string): string {
+  return `easy-git-key-${keyId}`;
+}
+
+export function readStoredKey(app: App, keyId: string): string | null {
+  const store = secretStorage(app);
+  if (!store) return null;
+  try {
+    return store.getSecret(keySecretId(keyId)) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeStoredKey(app: App, keyId: string, value: string): boolean {
+  const store = secretStorage(app);
+  if (!store) return false;
+  try {
+    store.setSecret(keySecretId(keyId), value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The API has no delete; clearing means storing an empty string. */
+export function clearStoredKey(app: App, keyId: string): void {
+  writeStoredKey(app, keyId, "");
+}

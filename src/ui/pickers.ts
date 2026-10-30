@@ -8,7 +8,7 @@ import {
   listForgejoRepos,
   listUserRepos,
 } from "../github/git-data";
-import { BranchSummary, RepoSummary } from "../types";
+import { BranchSummary, FolderMapping, MappingDestination, RepoSummary } from "../types";
 import { describeAuthError } from "../github/auth";
 
 export class VaultFolderSuggest extends FuzzySuggestModal<TFolder> {
@@ -202,6 +202,38 @@ export class RemoteFolderSuggest extends FuzzySuggestModal<string> {
     // Repo root → empty string (the engine treats "" as "place files at
     // the repo root"). Anything else is the path verbatim.
     this.onChoose(p === "/" ? "" : p);
+  }
+}
+
+/** One (mapping, destination) pair with a precomputed display label, for
+ * the flat destination picker used by the encryption commands. */
+export interface DestinationChoice {
+  mapping: FolderMapping;
+  destination: MappingDestination;
+  label: string;
+}
+
+export class DestinationSuggest extends FuzzySuggestModal<DestinationChoice> {
+  constructor(
+    app: App,
+    private choices: DestinationChoice[],
+    placeholder: string,
+    private onChoose: (choice: DestinationChoice) => void,
+  ) {
+    super(app);
+    this.setPlaceholder(placeholder);
+  }
+
+  getItems(): DestinationChoice[] {
+    return this.choices;
+  }
+
+  getItemText(c: DestinationChoice): string {
+    return c.label;
+  }
+
+  onChooseItem(c: DestinationChoice): void {
+    this.onChoose(c);
   }
 }
 

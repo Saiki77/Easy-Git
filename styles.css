@@ -613,3 +613,8 @@
 .easy-git-prune-row.is-unique .easy-git-prune-hint {
   color: var(--text-warning);
 }
+
+.easy-git-secret-box {
+  width: 100%;
+  font-family: var(--font-monospace);
+}

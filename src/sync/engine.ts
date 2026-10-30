@@ -29,13 +29,21 @@ import {
   updateRef,
 } from "../github/git-data";
 import {
-  arrayBufferToBase64,
   base64ToArrayBuffer,
   base64ToString,
-  computeGitBlobShaFromArrayBuffer,
-  computeGitBlobShaFromString,
+  bytesToBase64,
+  computeGitBlobShaFromBytes,
   isLikelyTextPath,
+  stringToBase64,
 } from "./blob-sha";
+import { ContentKeys, decryptContent, encryptContent } from "../crypto/cipher";
+import { hasEnvelopeMagic } from "../crypto/format";
+import {
+  CRYPTO_METADATA_FILENAME,
+  EncryptionMetadataFile,
+  parseMetadata,
+  serializeMetadata,
+} from "../crypto/metadata";
 import {
   MovePair,
   ResolvedConflictPlan,
@@ -69,6 +77,21 @@ interface PullRestoreCounts {
   calloutsRestored?: number;
   highlightsRestored?: number;
   mathMacrosRestored?: number;
+  /** Encrypted destinations only: this pull delivered a remote file that
+   * carried no envelope (pre-migration history or a foreign tool's push). */
+  plaintextRemote?: number;
+}
+
+/** Encryption lifecycle file operations that ride along in a push commit:
+ * uploading .easy-git-crypto.json on the first encrypted push, or deleting
+ * it after "Disable encryption". Never both in one run. */
+interface CryptoFileOps {
+  /** Serialized metadata file to create/update at the remoteFolder root. */
+  uploadMetaBase64?: string;
+  /** Remote blob SHA of the existing metadata file, when present. */
+  existingMetaSha?: string;
+  /** Delete the remote metadata file. */
+  removeMeta?: boolean;
 }
 
 export interface SyncEngineDeps {
@@ -83,6 +106,10 @@ export interface SyncEngineDeps {
     destination: MappingDestination,
     conflicts: ConflictEntry[],
   ) => Promise<ConflictEntry[] | null>;
+  /** Content keys for an encrypted destination's key id, or null when the
+   * key is not on this device. Never prompts; a null fails the run with
+   * guidance instead. Optional so plaintext-only setups need no wiring. */
+  resolveEncryptionKeys?: (keyId: string) => Promise<ContentKeys | null>;
 }
 
 const MAX_NON_FF_RETRIES = 3;
@@ -194,6 +221,21 @@ export class SyncEngine {
       durationMs: 0,
     };
 
+    // 0. Resolve encryption keys up front, so a locked destination fails
+    // fast with guidance and before any network write.
+    let cryptoKeys: ContentKeys | undefined;
+    if (destination.encryption) {
+      const resolved = await this.deps.resolveEncryptionKeys?.(
+        destination.encryption.keyId,
+      );
+      if (!resolved) {
+        baseResult.error =
+          'This destination is encrypted and locked on this device. Run "Easy Git: Unlock encrypted destination…" to enter the passphrase.';
+        return baseResult;
+      }
+      cryptoKeys = resolved;
+    }
+
     // 1. Pin remote head.
     const head = await getBranchHead(
       client,
@@ -244,6 +286,64 @@ export class SyncEngine {
       );
     }
 
+    // 2.6 Encryption state checks against the remote metadata file. The
+    // entry is captured here, BEFORE the exclusion filter below strips the
+    // file from classification. Invariant: a destination marked encrypted
+    // has the metadata file on the remote, an unmarked one does not; every
+    // mismatch halts with guidance instead of guessing.
+    const remoteCryptoMeta = remote[CRYPTO_METADATA_FILENAME];
+    if (
+      !destination.encryption &&
+      remoteCryptoMeta &&
+      !destination.pendingCryptoMetaRemoval
+    ) {
+      baseResult.error =
+        `This remote folder is end-to-end encrypted (${CRYPTO_METADATA_FILENAME} present). ` +
+        'Run "Easy Git: Unlock encrypted destination…" to enter the passphrase.';
+      return baseResult;
+    }
+    if (destination.pendingCryptoMetaRemoval && !remoteCryptoMeta) {
+      // Another run (or device) already removed the file; nothing to do.
+      destination.pendingCryptoMetaRemoval = undefined;
+      await this.deps.saveSettings();
+    }
+    if (destination.encryption?.metaUploaded && !remoteCryptoMeta) {
+      baseResult.error =
+        "The encryption metadata file is missing from the remote; encryption may have been " +
+        "disabled from another device. If so, disable it here too; otherwise re-enable it for " +
+        "this destination.";
+      return baseResult;
+    }
+    if (destination.encryption && !destination.encryption.metaUploaded) {
+      if (remoteCryptoMeta) {
+        // The file is already there (an earlier run's commit landed, or a
+        // second device raced us). Confirm it carries OUR key before
+        // trusting it; a different key id means the remote was re-keyed.
+        const metaBlob = await getBlobContent(
+          client,
+          destination.repoOwner,
+          destination.repoName,
+          remoteCryptoMeta.sha,
+        );
+        const remoteMeta = parseMetadata(base64ToString(metaBlob.content));
+        if (remoteMeta.keyId !== destination.encryption.keyId) {
+          baseResult.error =
+            `The remote is encrypted with a different key (${remoteMeta.keyId.slice(0, 8)}…) ` +
+            'than this device is set up for. Run "Easy Git: Unlock encrypted destination…" ' +
+            "to switch to the remote key.";
+          return baseResult;
+        }
+        destination.encryption.metaUploaded = true;
+        await this.deps.saveSettings();
+      } else if (mapping.direction === "pull") {
+        baseResult.error =
+          "This destination is set to encrypt, but the remote has no encryption metadata and a " +
+          "pull-only mapping never pushes it. Enable encryption from a device that pushes, or " +
+          'change the mapping direction to "both".';
+        return baseResult;
+      }
+    }
+
     // 2.5 First-sync-after-v0.2 auto-enable for existing mappings.
     if (
       mapping.rewriteWikilinks === undefined &&
@@ -261,7 +361,13 @@ export class SyncEngine {
     }
 
     // 3. Read local files (applies wikilink rewrite for .md when enabled).
-    const localScan = await this.scanLocalFolder(mapping);
+    // For an encrypted destination the scan records ciphertext SHAs, so the
+    // classifier compares like with like against the remote.
+    const localScan = await this.scanLocalFolder(
+      mapping,
+      { populateCaches: true },
+      cryptoKeys,
+    );
     baseResult.skippedLarge = localScan.skipped;
     if (localScan.rewrittenWikilinks > 0) {
       baseResult.rewrittenWikilinks = localScan.rewrittenWikilinks;
@@ -357,6 +463,7 @@ export class SyncEngine {
           localScan.files,
           lastState,
           backupTimestamp,
+          cryptoKeys,
         );
         if (mergedCount > 0) {
           baseResult.mergedConflicts =
@@ -410,19 +517,25 @@ export class SyncEngine {
     let calloutsRestored = 0;
     let highlightsRestored = 0;
     let mathMacrosRestored = 0;
+    let plaintextRemote = 0;
     const accumulate = (c: PullRestoreCounts) => {
       if (c.calloutsRestored) calloutsRestored += c.calloutsRestored;
       if (c.highlightsRestored) highlightsRestored += c.highlightsRestored;
       if (c.mathMacrosRestored) mathMacrosRestored += c.mathMacrosRestored;
+      if (c.plaintextRemote) plaintextRemote += c.plaintextRemote;
     };
     for (const action of actions) {
       if (action.op === "pull-modify") {
         const fullPath = vaultPathFor(mapping, action.path);
         const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
         if (backed) backupsCreated += 1;
-        accumulate(await this.applyPullModify(mapping, destination, action, client));
+        accumulate(
+          await this.applyPullModify(mapping, destination, action, client, cryptoKeys),
+        );
       } else if (action.op === "pull-add") {
-        accumulate(await this.applyPullModify(mapping, destination, action, client));
+        accumulate(
+          await this.applyPullModify(mapping, destination, action, client, cryptoKeys),
+        );
       } else if (action.op === "pull-delete") {
         const fullPath = vaultPathFor(mapping, action.path);
         const backed = await this.backupVaultFile(mapping, fullPath, backupTimestamp);
@@ -438,15 +551,44 @@ export class SyncEngine {
     if (calloutsRestored > 0) baseResult.calloutsRestored = calloutsRestored;
     if (highlightsRestored > 0) baseResult.highlightsRestored = highlightsRestored;
     if (mathMacrosRestored > 0) baseResult.mathMacrosRestored = mathMacrosRestored;
+    if (plaintextRemote > 0) baseResult.plaintextRemoteFiles = plaintextRemote;
 
-    // 8. Build remote commit if push actions exist.
+    // 8. Build remote commit if push actions exist. Encryption lifecycle
+    // file operations (upload the metadata file on the first encrypted
+    // push, delete it after "Disable encryption") ride in the same commit.
     const pushActions = actions.filter(
       (a) =>
         a.op === "push-add" || a.op === "push-modify" || a.op === "push-delete",
     );
 
+    const cryptoOps: CryptoFileOps = { existingMetaSha: remoteCryptoMeta?.sha };
+    if (
+      mapping.direction !== "pull" &&
+      cryptoKeys &&
+      destination.encryption &&
+      !destination.encryption.metaUploaded
+    ) {
+      const meta = this.deps.settings.encryptionMeta?.[destination.encryption.keyId];
+      if (!meta) {
+        baseResult.error =
+          "Encryption metadata for this destination is missing on this device. " +
+          "Disable and re-enable encryption to regenerate it.";
+        return baseResult;
+      }
+      cryptoOps.uploadMetaBase64 = stringToBase64(serializeMetadata(meta));
+    }
+    if (
+      mapping.direction !== "pull" &&
+      destination.pendingCryptoMetaRemoval &&
+      remoteCryptoMeta
+    ) {
+      cryptoOps.removeMeta = true;
+    }
+    const hasCryptoOps =
+      cryptoOps.uploadMetaBase64 !== undefined || !!cryptoOps.removeMeta;
+
     let newCommitSha: string | undefined;
-    if (pushActions.length > 0) {
+    if (pushActions.length > 0 || hasCryptoOps) {
       if (this.deps.settings.auth.provider === "forgejo") {
         // Forgejo does not implement the Git Data write API (POST /git/blobs,
         // /git/trees, /git/commits, PATCH /git/refs). Use the contents API
@@ -460,6 +602,8 @@ export class SyncEngine {
           remote,
           head.commitSha,
           moves.push,
+          cryptoKeys,
+          cryptoOps,
         );
         if (sha === null) {
           // Non-fast-forward: someone pushed during our run.
@@ -476,12 +620,22 @@ export class SyncEngine {
           pushActions,
           localScan.files,
           moves.push,
+          cryptoKeys,
+          cryptoOps,
         );
         if (commitResult === null) {
           // Non-fast-forward: someone pushed during our run.
           return "retry";
         }
         newCommitSha = commitResult;
+      }
+      if (newCommitSha) {
+        if (cryptoOps.uploadMetaBase64 !== undefined && destination.encryption) {
+          destination.encryption.metaUploaded = true;
+        }
+        if (cryptoOps.removeMeta) {
+          destination.pendingCryptoMetaRemoval = undefined;
+        }
       }
     }
 
@@ -560,6 +714,7 @@ export class SyncEngine {
   private async scanLocalFolder(
     mapping: FolderMapping,
     opts: { populateCaches: boolean } = { populateCaches: true },
+    cryptoKeys?: ContentKeys,
   ): Promise<{
     files: Record<string, LocalFileEntry>;
     skipped: string[];
@@ -617,6 +772,7 @@ export class SyncEngine {
     const localIgnore = await this.loadLocalIgnore(mapping);
     const excludePatterns = [
       ".easygitignore",
+      CRYPTO_METADATA_FILENAME,
       ".easy-git-backup/**",
       ...this.deps.settings.excludedPaths,
       ...localIgnore,
@@ -677,18 +833,22 @@ export class SyncEngine {
               accumulatedExtraBlobs.push(blob);
             }
             contentCache.set(relPath, finalText);
+            const eff = await this.effectiveShaAndSize(
+              new TextEncoder().encode(finalText),
+              cryptoKeys,
+            );
             files[relPath] = {
               path: relPath,
-              sha: await computeGitBlobShaFromString(finalText),
-              size: new TextEncoder().encode(finalText).byteLength,
+              sha: eff.sha,
+              size: eff.size,
               mtime: child.stat.mtime,
             };
           } else {
-            const sha = await this.computeLocalSha(child);
+            const eff = await this.computeLocalEffective(child, cryptoKeys);
             files[relPath] = {
               path: relPath,
-              sha,
-              size: child.stat.size,
+              sha: eff.sha,
+              size: cryptoKeys ? eff.size : child.stat.size,
               mtime: child.stat.mtime,
             };
           }
@@ -708,7 +868,14 @@ export class SyncEngine {
     // handled here (TFolder walk doesn't enter them either) — that's a
     // rarer case and the apply path's adapter fallback already keeps it
     // functional, just noisy.
-    await this.augmentScanWithDotfiles(folder, mapping, files, excludePatterns, maxBytes);
+    await this.augmentScanWithDotfiles(
+      folder,
+      mapping,
+      files,
+      excludePatterns,
+      maxBytes,
+      cryptoKeys,
+    );
 
     // Fold the deduplicated extra blobs (out-of-folder attachments) into the
     // local file map so the classifier treats them as locally-present files
@@ -723,11 +890,11 @@ export class SyncEngine {
         skipped.push(blob.remoteRelPath);
         continue;
       }
-      const sha = await this.computeLocalSha(sourceFile);
+      const eff = await this.computeLocalEffective(sourceFile, cryptoKeys);
       files[blob.remoteRelPath] = {
         path: blob.remoteRelPath,
-        sha,
-        size: sourceFile.stat.size,
+        sha: eff.sha,
+        size: cryptoKeys ? eff.size : sourceFile.stat.size,
         mtime: sourceFile.stat.mtime,
       };
       attachmentSources.set(blob.remoteRelPath, blob.vaultPath);
@@ -776,6 +943,7 @@ export class SyncEngine {
     localFiles: Record<string, LocalFileEntry>,
     lastState: Record<string, FileSyncRecord>,
     backupTimestamp: string,
+    crypto?: ContentKeys,
   ): Promise<number> {
     let merged = 0;
     const rewriteOn = isRewriteEnabled(mapping) && mapping.direction !== "pull";
@@ -802,8 +970,25 @@ export class SyncEngine {
           getBlobContent(client, destination.repoOwner, destination.repoName, baseFileSha),
           getBlobContent(client, destination.repoOwner, destination.repoName, c.remoteSha),
         ]);
-        const baseText = base64ToString(baseBlob.content);
-        const remoteText = base64ToString(remoteBlob.content);
+        const baseRaw = new Uint8Array(base64ToArrayBuffer(baseBlob.content));
+        const remoteRaw = new Uint8Array(base64ToArrayBuffer(remoteBlob.content));
+        // Encrypted blobs merge on their plaintext. Without keys on hand
+        // an enveloped blob cannot merge meaningfully; leave it for the
+        // modal (cannot happen while the runOnce halt checks hold, but a
+        // wrong guess here would merge ciphertext bytes into the vault).
+        if (!crypto && (hasEnvelopeMagic(baseRaw) || hasEnvelopeMagic(remoteRaw))) {
+          continue;
+        }
+        const baseText = new TextDecoder().decode(
+          crypto && hasEnvelopeMagic(baseRaw)
+            ? await decryptContent(crypto, baseRaw)
+            : baseRaw,
+        );
+        const remoteText = new TextDecoder().decode(
+          crypto && hasEnvelopeMagic(remoteRaw)
+            ? await decryptContent(crypto, remoteRaw)
+            : remoteRaw,
+        );
 
         const vaultPath = vaultPathFor(mapping, c.path);
         const file = this.deps.app.vault.getFileByPath(vaultPath);
@@ -824,12 +1009,16 @@ export class SyncEngine {
         const mergedText = result.result.join("\n");
         await this.deps.app.vault.modify(file, mergedText);
 
-        // Update the in-memory local scan so push-modify reads the new SHA.
-        const newSha = await computeGitBlobShaFromString(mergedText);
+        // Update the in-memory local scan so push-modify reads the new SHA
+        // (the envelope's SHA on an encrypted destination).
+        const eff = await this.effectiveShaAndSize(
+          new TextEncoder().encode(mergedText),
+          crypto,
+        );
         localFiles[c.path] = {
           path: c.path,
-          sha: newSha,
-          size: new TextEncoder().encode(mergedText).byteLength,
+          sha: eff.sha,
+          size: eff.size,
           mtime: Date.now(),
         };
 
@@ -961,10 +1150,20 @@ export class SyncEngine {
       ? ""
       : mapping.vaultFolder.replace(/^\/+|\/+$/g, "");
     const path = folder ? `${folder}/.easygitignore` : ".easygitignore";
-    const file = this.deps.app.vault.getFileByPath(path);
-    if (!file) return [];
     try {
-      const text = await this.deps.app.vault.read(file);
+      // The vault layer hides dotfiles: getFileByPath() returns null for
+      // them, so on current Obsidian builds only the adapter branch below
+      // ever reads the file. The vault lookup stays first as the indexed
+      // fast path in case Obsidian surfaces dotfiles one day — same
+      // pattern as backupVaultFile and the v1.4.9 dotfile handling.
+      const file = this.deps.app.vault.getFileByPath(path);
+      if (file) {
+        const text = await this.deps.app.vault.read(file);
+        return text.split(/\r?\n/);
+      }
+      const adapter = this.deps.app.vault.adapter;
+      if (!(await adapter.exists(path))) return [];
+      const text = await adapter.read(path);
       return text.split(/\r?\n/);
     } catch {
       return [];
@@ -979,13 +1178,31 @@ export class SyncEngine {
     };
   }
 
-  private async computeLocalSha(file: TFile): Promise<string> {
-    if (isLikelyTextPath(file.path)) {
-      const text = await this.deps.app.vault.read(file);
-      return computeGitBlobShaFromString(text);
-    }
-    const buf = await this.deps.app.vault.readBinary(file);
-    return computeGitBlobShaFromArrayBuffer(buf);
+  /**
+   * SHA and size of the given bytes as they would exist on the remote:
+   * the encryption envelope's when keys are given, verbatim otherwise.
+   * This single choke point is what keeps the classifier comparing like
+   * with like — every local SHA the engine records goes through here.
+   */
+  private async effectiveShaAndSize(
+    bytes: Uint8Array,
+    crypto?: ContentKeys,
+  ): Promise<{ sha: string; size: number }> {
+    const effective = crypto ? await encryptContent(crypto, bytes) : bytes;
+    return {
+      sha: await computeGitBlobShaFromBytes(effective),
+      size: effective.byteLength,
+    };
+  }
+
+  private async computeLocalEffective(
+    file: TFile,
+    crypto?: ContentKeys,
+  ): Promise<{ sha: string; size: number }> {
+    const bytes = isLikelyTextPath(file.path)
+      ? new TextEncoder().encode(await this.deps.app.vault.read(file))
+      : new Uint8Array(await this.deps.app.vault.readBinary(file));
+    return this.effectiveShaAndSize(bytes, crypto);
   }
 
   /**
@@ -1005,6 +1222,7 @@ export class SyncEngine {
     files: Record<string, LocalFileEntry>,
     excludePatterns: string[],
     maxBytes: number,
+    cryptoKeys?: ContentKeys,
   ): Promise<void> {
     const adapter = this.deps.app.vault.adapter;
     // Collect every folder path we visited so we can re-walk via adapter.
@@ -1049,22 +1267,19 @@ export class SyncEngine {
           continue;
         }
         if (!stat || stat.size > maxBytes) continue;
-        let sha: string;
+        let eff: { sha: string; size: number };
         try {
-          if (isLikelyTextPath(filePath)) {
-            const text = await adapter.read(filePath);
-            sha = await computeGitBlobShaFromString(text);
-          } else {
-            const buf = await adapter.readBinary(filePath);
-            sha = await computeGitBlobShaFromArrayBuffer(buf);
-          }
+          const bytes = isLikelyTextPath(filePath)
+            ? new TextEncoder().encode(await adapter.read(filePath))
+            : new Uint8Array(await adapter.readBinary(filePath));
+          eff = await this.effectiveShaAndSize(bytes, cryptoKeys);
         } catch {
           continue;
         }
         files[relPath] = {
           path: relPath,
-          sha,
-          size: stat.size,
+          sha: eff.sha,
+          size: cryptoKeys ? eff.size : stat.size,
           mtime: stat.mtime,
         };
       }
@@ -1076,6 +1291,7 @@ export class SyncEngine {
     destination: MappingDestination,
     action: FileAction,
     client: GitHubClient,
+    crypto?: ContentKeys,
   ): Promise<PullRestoreCounts> {
     const counts: PullRestoreCounts = {};
     if (!action.remoteSha) return counts;
@@ -1091,9 +1307,29 @@ export class SyncEngine {
       const existing =
         this.deps.app.vault.getFileByPath(fullPath) ??
         findFileCaseInsensitive(this.deps.app, fullPath);
+      // Decrypt before anything else looks at the bytes. Sniffing the
+      // magic per blob (instead of trusting the destination flag) keeps
+      // mixed remotes correct: pre-migration plaintext passes through
+      // (counted, surfaced as a Notice), and an enveloped blob without a
+      // key on hand aborts rather than writing ciphertext into the vault.
+      const rawBuf = base64ToArrayBuffer(blob.content);
+      let content: Uint8Array = new Uint8Array(rawBuf);
+      let wasEncrypted = false;
+      if (hasEnvelopeMagic(content)) {
+        if (!crypto) {
+          throw new Error(
+            "The remote file is end-to-end encrypted, but this destination has no key on " +
+              'this device. Run "Easy Git: Unlock encrypted destination…" first.',
+          );
+        }
+        content = await decryptContent(crypto, content);
+        wasEncrypted = true;
+      } else if (crypto) {
+        counts.plaintextRemote = (counts.plaintextRemote ?? 0) + 1;
+      }
       const isText = isLikelyTextPath(fullPath) && blob.encoding !== "base64-binary";
       if (isText) {
-        let text = base64ToString(blob.content);
+        let text = new TextDecoder().decode(content);
         // Pull-side restore: invert the push-time GitHub rendering
         // rewrites (callouts, highlights, math) for .md files when
         // rewriteWikilinks is enabled. No-op on files that have no
@@ -1115,7 +1351,9 @@ export class SyncEngine {
           await this.createOrFallbackText(fullPath, text);
         }
       } else {
-        const buf = base64ToArrayBuffer(blob.content);
+        // slice() re-anchors the decrypted view on a fresh, exactly-sized
+        // ArrayBuffer for the vault's binary write APIs.
+        const buf = wasEncrypted ? content.slice().buffer : rawBuf;
         if (existing) {
           await this.deps.app.vault.modifyBinary(existing, buf);
         } else {
@@ -1223,6 +1461,8 @@ export class SyncEngine {
     remote: Record<string, RemoteFileEntry>,
     baseCommitSha: string,
     movePairs: MovePair[],
+    crypto: ContentKeys | undefined,
+    cryptoOps: CryptoFileOps,
   ): Promise<string | null | typeof BATCH_UNSUPPORTED> {
     const files: BatchFileOperation[] = [];
     let added = 0,
@@ -1238,7 +1478,7 @@ export class SyncEngine {
         files.push({ operation: "delete", path: fullRepoPath, sha: existingSha });
         deleted += 1;
       } else {
-        const content = await this.readVaultFile(mapping, action.path);
+        const content = await this.readVaultFile(mapping, action.path, crypto);
         const existingSha =
           action.op === "push-modify" ? remote[action.path]?.sha : undefined;
         if (existingSha) {
@@ -1260,19 +1500,46 @@ export class SyncEngine {
       }
       changedFiles.push(action.path);
     }
+    const metaRepoPath = repoPathFor(destination, CRYPTO_METADATA_FILENAME);
+    if (cryptoOps.uploadMetaBase64 !== undefined) {
+      if (cryptoOps.existingMetaSha) {
+        files.push({
+          operation: "update",
+          path: metaRepoPath,
+          content: cryptoOps.uploadMetaBase64,
+          sha: cryptoOps.existingMetaSha,
+        });
+      } else {
+        files.push({
+          operation: "create",
+          path: metaRepoPath,
+          content: cryptoOps.uploadMetaBase64,
+        });
+      }
+    }
+    if (cryptoOps.removeMeta && cryptoOps.existingMetaSha) {
+      files.push({
+        operation: "delete",
+        path: metaRepoPath,
+        sha: cryptoOps.existingMetaSha,
+      });
+    }
     if (files.length === 0) return "";
 
     const template =
       mapping.commitTemplate ?? this.deps.settings.defaultCommitTemplate;
-    const message = formatCommitMessage(template, {
-      mappingName: mapping.name,
-      vaultName: this.deps.app.vault.getName(),
-      added,
-      modified,
-      deleted,
-      files: changedFiles,
-      moved: movePairs,
-    });
+    const message =
+      pushActions.length === 0
+        ? cryptoMetaOnlyMessage(mapping, cryptoOps)
+        : formatCommitMessage(template, {
+            mappingName: mapping.name,
+            vaultName: this.deps.app.vault.getName(),
+            added,
+            modified,
+            deleted,
+            files: changedFiles,
+            moved: movePairs,
+          });
 
     try {
       const sha = await changeFilesBatch(
@@ -1336,6 +1603,8 @@ export class SyncEngine {
     remote: Record<string, RemoteFileEntry>,
     baseCommitSha: string,
     movePairs: MovePair[],
+    crypto: ContentKeys | undefined,
+    cryptoOps: CryptoFileOps,
   ): Promise<string | null> {
     if (this.forgejoBatchSupported !== false) {
       const batch = await this.tryPushViaBatchContents(
@@ -1346,6 +1615,8 @@ export class SyncEngine {
         remote,
         baseCommitSha,
         movePairs,
+        crypto,
+        cryptoOps,
       );
       if (batch !== BATCH_UNSUPPORTED) return batch;
     }
@@ -1356,6 +1627,40 @@ export class SyncEngine {
     // be told apart from our own commits by re-pinning and comparing.
     let expectedHead = baseCommitSha;
     const prefix = `[Easy Git] ${mapping.name}`;
+    const metaRepoPath = repoPathFor(destination, CRYPTO_METADATA_FILENAME);
+
+    // Metadata upload goes FIRST on the non-atomic per-file path: if the
+    // migration stops partway, a second device can already unlock and the
+    // next sync finishes the content.
+    if (cryptoOps.uploadMetaBase64 !== undefined) {
+      try {
+        const result = await putFileContents(
+          client,
+          destination.repoOwner,
+          destination.repoName,
+          metaRepoPath,
+          cryptoOps.uploadMetaBase64,
+          `${prefix}: enable encryption`,
+          destination.branch,
+          cryptoOps.existingMetaSha,
+        );
+        lastCommitSha = result.commitSha;
+        expectedHead = lastCommitSha;
+      } catch (e) {
+        if (e instanceof GitHubApiError && (e.status === 409 || e.status === 422)) {
+          const fresh = await getBranchHead(
+            client,
+            destination.repoOwner,
+            destination.repoName,
+            destination.branch,
+          );
+          if (fresh.commitSha && fresh.commitSha !== expectedHead) {
+            return null;
+          }
+        }
+        throw e;
+      }
+    }
 
     for (const action of pushActions) {
       const fullRepoPath = repoPathFor(destination, action.path);
@@ -1374,7 +1679,7 @@ export class SyncEngine {
             existingSha,
           );
         } else {
-          const content = await this.readVaultFile(mapping, action.path);
+          const content = await this.readVaultFile(mapping, action.path, crypto);
           const existingSha = action.op === "push-modify" ? remote[action.path]?.sha : undefined;
           const opLabel = action.op === "push-add" ? "add" : "update";
           const result = await putFileContents(
@@ -1410,6 +1715,37 @@ export class SyncEngine {
       }
     }
 
+    // Metadata removal goes LAST: content is decrypted first, then the
+    // marker disappears, so an interrupted disable never strands a repo
+    // that looks unencrypted but still holds envelopes.
+    if (cryptoOps.removeMeta && cryptoOps.existingMetaSha) {
+      try {
+        lastCommitSha = await deleteFileContents(
+          client,
+          destination.repoOwner,
+          destination.repoName,
+          metaRepoPath,
+          `${prefix}: disable encryption`,
+          destination.branch,
+          cryptoOps.existingMetaSha,
+        );
+        expectedHead = lastCommitSha;
+      } catch (e) {
+        if (e instanceof GitHubApiError && (e.status === 409 || e.status === 422)) {
+          const fresh = await getBranchHead(
+            client,
+            destination.repoOwner,
+            destination.repoName,
+            destination.branch,
+          );
+          if (fresh.commitSha && fresh.commitSha !== expectedHead) {
+            return null;
+          }
+        }
+        throw e;
+      }
+    }
+
     return lastCommitSha;
   }
 
@@ -1422,6 +1758,8 @@ export class SyncEngine {
     pushActions: FileAction[],
     localFiles: Record<string, LocalFileEntry>,
     movePairs: MovePair[],
+    crypto: ContentKeys | undefined,
+    cryptoOps: CryptoFileOps,
   ): Promise<string | null> {
     const treeEntries: NewTreeEntry[] = [];
     let added = 0,
@@ -1445,7 +1783,7 @@ export class SyncEngine {
 
       const local = localFiles[action.path];
       if (!local) continue;
-      const content = await this.readVaultFile(mapping, action.path);
+      const content = await this.readVaultFile(mapping, action.path, crypto);
       const blobSha = await createBlob(
         client,
         destination.repoOwner,
@@ -1462,6 +1800,29 @@ export class SyncEngine {
       else if (action.op === "push-modify") modified += 1;
     }
 
+    if (cryptoOps.uploadMetaBase64 !== undefined) {
+      const blobSha = await createBlob(
+        client,
+        destination.repoOwner,
+        destination.repoName,
+        cryptoOps.uploadMetaBase64,
+      );
+      treeEntries.push({
+        path: repoPathFor(destination, CRYPTO_METADATA_FILENAME),
+        mode: "100644",
+        type: "blob",
+        sha: blobSha,
+      });
+    }
+    if (cryptoOps.removeMeta) {
+      treeEntries.push({
+        path: repoPathFor(destination, CRYPTO_METADATA_FILENAME),
+        mode: "100644",
+        type: "blob",
+        sha: null,
+      });
+    }
+
     const newTreeSha = await createTree(
       client,
       destination.repoOwner,
@@ -1470,15 +1831,18 @@ export class SyncEngine {
       treeEntries,
     );
     const template = mapping.commitTemplate ?? this.deps.settings.defaultCommitTemplate;
-    const message = formatCommitMessage(template, {
-      mappingName: mapping.name,
-      vaultName: this.deps.app.vault.getName(),
-      added,
-      modified,
-      deleted,
-      files: changedFiles,
-      moved: movePairs,
-    });
+    const message =
+      pushActions.length === 0
+        ? cryptoMetaOnlyMessage(mapping, cryptoOps)
+        : formatCommitMessage(template, {
+            mappingName: mapping.name,
+            vaultName: this.deps.app.vault.getName(),
+            added,
+            modified,
+            deleted,
+            files: changedFiles,
+            moved: movePairs,
+          });
     const newCommitSha = await createCommit(
       client,
       destination.repoOwner,
@@ -1501,12 +1865,24 @@ export class SyncEngine {
   private async readVaultFile(
     mapping: FolderMapping,
     relPath: string,
+    crypto?: ContentKeys,
   ): Promise<{ base64: string }> {
+    const plain = await this.readVaultFilePlainBytes(mapping, relPath);
+    // Re-encrypting here (instead of caching ciphertext from the scan) is
+    // safe because the scheme is deterministic: the envelope is
+    // byte-identical to the one whose SHA the scan recorded.
+    const effective = crypto ? await encryptContent(crypto, plain) : plain;
+    return { base64: bytesToBase64(effective) };
+  }
+
+  private async readVaultFilePlainBytes(
+    mapping: FolderMapping,
+    relPath: string,
+  ): Promise<Uint8Array> {
     // Cached rewritten markdown content (computed during scan).
     const cached = this.rewriteContentCache.get(relPath);
     if (cached !== undefined) {
-      const bytes = new TextEncoder().encode(cached);
-      return { base64: arrayBufferToBase64(bytes.buffer) };
+      return new TextEncoder().encode(cached);
     }
     // Out-of-folder attachment: read from its real vault path.
     const attachmentSource = this.attachmentSourceMap.get(relPath);
@@ -1515,8 +1891,7 @@ export class SyncEngine {
       if (!sourceFile) {
         throw new Error(`Attachment source not found: ${attachmentSource}`);
       }
-      const buf = await this.deps.app.vault.readBinary(sourceFile);
-      return { base64: arrayBufferToBase64(buf) };
+      return new Uint8Array(await this.deps.app.vault.readBinary(sourceFile));
     }
 
     const fullPath = vaultPathFor(mapping, relPath);
@@ -1524,11 +1899,9 @@ export class SyncEngine {
     if (!file) throw new Error(`Vault file not found: ${fullPath}`);
     if (isLikelyTextPath(file.path)) {
       const text = await this.deps.app.vault.read(file);
-      const bytes = new TextEncoder().encode(text);
-      return { base64: arrayBufferToBase64(bytes.buffer) };
+      return new TextEncoder().encode(text);
     }
-    const buf = await this.deps.app.vault.readBinary(file);
-    return { base64: arrayBufferToBase64(buf) };
+    return new Uint8Array(await this.deps.app.vault.readBinary(file));
   }
 
   // -------------------------------------------------------------------
@@ -1571,6 +1944,7 @@ export class SyncEngine {
     // re-derive the same patterns for the remote side below.
     const excludePatterns = [
       ".easygitignore",
+      CRYPTO_METADATA_FILENAME,
       ".easy-git-backup/**",
       ...this.deps.settings.excludedPaths,
       ...(await this.loadLocalIgnore(mapping)),
@@ -1666,6 +2040,39 @@ export class SyncEngine {
     return result;
   }
 
+  /**
+   * Fetch and parse the destination's remote `.easy-git-crypto.json`, or
+   * null when the remote folder carries none. Used by the unlock flow;
+   * no sync path calls this (syncs see the file in their own remote walk).
+   */
+  async fetchRemoteCryptoMetadata(
+    destination: MappingDestination,
+  ): Promise<EncryptionMetadataFile | null> {
+    const client = this.clientOrThrow();
+    const head = await getBranchHead(
+      client,
+      destination.repoOwner,
+      destination.repoName,
+      destination.branch,
+    );
+    const scan = await listRemoteFolderFiles(
+      client,
+      destination.repoOwner,
+      destination.repoName,
+      head.treeSha,
+      destination.remoteFolder,
+    );
+    const entry = scan.files[CRYPTO_METADATA_FILENAME];
+    if (!entry) return null;
+    const blob = await getBlobContent(
+      client,
+      destination.repoOwner,
+      destination.repoName,
+      entry.sha,
+    );
+    return parseMetadata(base64ToString(blob.content));
+  }
+
   private clientOrThrow(): GitHubClient {
     const auth = this.deps.settings.auth;
     if (auth.method === "none" || !auth.token) {
@@ -1739,6 +2146,17 @@ export function isRewriteEnabled(mapping: FolderMapping): boolean {
 export function destinationLabel(d: MappingDestination): string {
   const remote = d.remoteFolder || "/";
   return `${d.repoOwner}/${d.repoName}:${d.branch}/${remote}`;
+}
+
+/** Commit message for a push that carries only the encryption metadata
+ * file (no content changed). The user's commit template would render a
+ * confusing "0+ 0~ 0-" for these. */
+function cryptoMetaOnlyMessage(
+  mapping: FolderMapping,
+  cryptoOps: CryptoFileOps,
+): string {
+  const verb = cryptoOps.uploadMetaBase64 !== undefined ? "enable" : "disable";
+  return `[Easy Git] ${mapping.name}: ${verb} encryption`;
 }
 
 /**

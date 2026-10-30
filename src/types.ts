@@ -1,3 +1,5 @@
+import type { EncryptionMetadataFile } from "./crypto/metadata";
+
 export type SyncDirection = "push" | "pull" | "both";
 
 export type AutoMode =
@@ -19,6 +21,21 @@ export interface LastSyncState {
 }
 
 /**
+ * End-to-end encryption state for one destination. Presence means "encrypt
+ * content for this destination"; absence means plaintext, byte-identical
+ * to pre-2.0 behaviour.
+ */
+export interface DestinationEncryption {
+  /** Hex id of the master key; matches every envelope header and the
+   * remote .easy-git-crypto.json. */
+  keyId: string;
+  /** True once the metadata file is confirmed present on the remote. While
+   * false, the next push injects it into the commit; once true, a missing
+   * remote file is treated as "encryption was disabled elsewhere". */
+  metaUploaded?: boolean;
+}
+
+/**
  * One sync target inside a mapping. A mapping can have several of these to
  * push the same vault folder to multiple repos / branches / remote paths.
  * Each destination tracks its own last-sync state.
@@ -32,6 +49,11 @@ export interface MappingDestination {
   lastSyncState?: LastSyncState;
   lastSyncAt?: number;
   lastSyncError?: string;
+  encryption?: DestinationEncryption;
+  /** Set by "Disable encryption": the next push deletes the remote
+   * .easy-git-crypto.json, then clears this flag. Distinguishes "we just
+   * disabled" from "another device's encrypted repo" (which must halt). */
+  pendingCryptoMetaRemoval?: boolean;
 }
 
 export interface FolderMapping {
@@ -141,6 +163,14 @@ export interface PluginSettings {
   backupRetentionDays?: number;
   /** Most-recent sync log entries, capped at SYNC_LOG_MAX. Newest first. */
   syncLog?: SyncLogEntry[];
+  /** Encryption master keys by key id, base64. Fallback storage ONLY for
+   * builds without the OS keystore; on 1.11.4+ keys live in the keystore
+   * and this map stays empty (see EncryptionKeychain). */
+  encryptionKeys?: Record<string, string>;
+  /** Public key metadata by key id — the device-local mirror of each
+   * destination's .easy-git-crypto.json (wrapped key, KDF params). Not
+   * secret; kept so the engine can upload or re-verify the remote file. */
+  encryptionMeta?: Record<string, EncryptionMetadataFile>;
 }
 
 export const SYNC_LOG_MAX = 100;
@@ -254,6 +284,11 @@ export interface SyncResult {
   mathMacrosRestored?: number;
   /** Paths that were added/modified/deleted in this run (push or pull side). */
   changedPaths?: string[];
+  /** Pull-side, encrypted destinations only: remote files that carried no
+   * encryption envelope and were pulled as plaintext (pre-migration
+   * history, or a file pushed by another tool). Surfaced as a Notice so
+   * mixed content is never silent. */
+  plaintextRemoteFiles?: number;
 }
 
 export interface LocalFileEntry {

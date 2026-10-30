@@ -37,6 +37,22 @@ export function stringToBase64(content: string): string {
   return arrayBufferToBase64(bytes.buffer);
 }
 
+/** Base64 of exactly the view's bytes, even when the view is a subarray of
+ * a larger buffer (arrayBufferToBase64 would encode the whole buffer). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i += BASE64_CHUNK) {
+    const end = Math.min(i + BASE64_CHUNK, bytes.byteLength);
+    const chunk = bytes.subarray(i, end);
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  return btoa(binary);
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  return new Uint8Array(base64ToArrayBuffer(b64));
+}
+
 export function base64ToArrayBuffer(b64: string): ArrayBuffer {
   const cleaned = b64.replace(/\s/g, "");
   const binary = atob(cleaned);
