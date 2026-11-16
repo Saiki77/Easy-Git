@@ -344,6 +344,8 @@ npm run build
 
 `main.js` is the bundled output. The release workflow at `.github/workflows/release.yml` builds and uploads `main.js` + `manifest.json` + `styles.css` on tag push.
 
+`npm test` runs the offline unit tests. `npm run test:e2e` runs two simulated devices against a real GitHub repo (sync, encryption on and off, unlock, merges, moves); it needs `EASY_GIT_E2E_TOKEN`, `EASY_GIT_E2E_REPO` (`owner/name`) and an existing scratch branch in `EASY_GIT_E2E_BRANCH`, and writes only under `e2e-runs/` on that branch.
+
 ## License
 
 [MIT](./LICENSE)
