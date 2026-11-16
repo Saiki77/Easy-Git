@@ -81,7 +81,7 @@ export class SyncLogModal extends Modal {
     }
     if (entry.changedPaths && entry.changedPaths.length > 0) {
       const filesBox = row.createDiv({ cls: "easy-git-log-files" });
-      filesBox.createEl("div", {
+      filesBox.createDiv({
         cls: "easy-git-log-files-label",
         text: `Files (${entry.changedPaths.length}):`,
       });
@@ -90,7 +90,7 @@ export class SyncLogModal extends Modal {
         ul.createEl("li", { text: path });
       }
       if (entry.changedPaths.length > 30) {
-        filesBox.createEl("div", {
+        filesBox.createDiv({
           cls: "easy-git-log-files-more",
           text: `…and ${entry.changedPaths.length - 30} more`,
         });
