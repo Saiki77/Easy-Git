@@ -350,6 +350,13 @@ export class EditMappingModal extends Modal {
       void modal.load();
     };
 
+    if (dest.encryption) {
+      card.createDiv({
+        cls: "easy-git-destination-note",
+        text: "🔒 End-to-end encrypted. Manage it with the Encryption button in the mapping list.",
+      });
+    }
+
     const actionsRow = card.createDiv({ cls: "easy-git-destination-actions" });
 
     // "Diagnose" — show exactly what the engine sees for this destination
@@ -457,6 +464,23 @@ export class EditMappingModal extends Modal {
       }
       if (dest.remoteFolder.endsWith("/")) {
         dest.remoteFolder = dest.remoteFolder.replace(/\/+$/, "");
+      }
+    }
+    // An encrypted destination pointed somewhere else needs its metadata
+    // file at the new place: the next sync uploads it there (or checks the
+    // key of one that is already there) instead of halting on its absence.
+    const before = new Map((this.opts.initial?.destinations ?? []).map((d) => [d.id, d]));
+    for (const dest of this.mapping.destinations) {
+      const prev = before.get(dest.id);
+      if (
+        dest.encryption &&
+        prev &&
+        (prev.repoOwner !== dest.repoOwner ||
+          prev.repoName !== dest.repoName ||
+          prev.branch !== dest.branch ||
+          prev.remoteFolder !== dest.remoteFolder)
+      ) {
+        dest.encryption.metaUploaded = false;
       }
     }
     await this.opts.onSave(this.mapping);

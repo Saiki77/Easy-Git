@@ -618,3 +618,9 @@
   width: 100%;
   font-family: var(--font-monospace);
 }
+
+.easy-git-destination-note {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin: 0.25rem 0;
+}

@@ -39,15 +39,17 @@ import { TokenStore, authForDisk, authProblem, hydrateAuth } from "./auth-state"
 import { FailureNotifier, notificationLevel, notifyInfo } from "./notifications";
 import { EncryptionKeychain } from "./crypto/keychain";
 import {
-  provisionEncryption,
-  unlockWithPassphrase,
-  unlockWithRecoveryKey,
-} from "./crypto/provision";
+  LifecycleContext,
+  disableEncryption,
+  enableEncryption,
+  encryptionState,
+  unlockDestination,
+} from "./crypto/lifecycle";
 import { EncryptionMetadataFile } from "./crypto/metadata";
-import { bytesToBase64 } from "./sync/blob-sha";
 import { ConfirmModal } from "./ui/confirm-modal";
 import {
   EncryptionSetupModal,
+  EncryptionStatusModal,
   EncryptionUnlockModal,
 } from "./ui/encryption-modals";
 
@@ -184,7 +186,7 @@ export default class EasyGitPlugin extends Plugin {
         this.pickEncryptionDestination(
           "Encrypt which destination?",
           (d) => !d.encryption,
-          (m, d) => this.startEncryptionSetup(m, d),
+          (m, d) => void this.startEncryptionSetup(m, d),
         );
       },
     });
@@ -953,12 +955,74 @@ export default class EasyGitPlugin extends Plugin {
     ).open();
   }
 
-  private startEncryptionSetup(
+  private lifecycle(): LifecycleContext {
+    return {
+      keychain: this.keychain,
+      settings: this.settings,
+      save: () => this.saveSettings(),
+    };
+  }
+
+  /** Encryption state of a destination on this device, for the settings UI. */
+  encryptionStateOf(destination: MappingDestination): ReturnType<typeof encryptionState> {
+    return encryptionState(destination, this.keychain);
+  }
+
+  /**
+   * The encryption dialog for one mapping: what it does, each destination's
+   * state, and the one action that fits. Opened from the mapping list and by
+   * explicit syncs that need it.
+   */
+  openEncryptionModal(mappingId: string): void {
+    const mapping = this.settings.mappings.find((m) => m.id === mappingId);
+    if (!mapping) return;
+    const problem = authProblem(this.settings.auth);
+    if (problem) {
+      new Notice(`Easy Git: ${problem}`);
+      return;
+    }
+    const entries = mapping.destinations
+      .filter((d) => d.repoOwner && d.repoName && d.branch)
+      .map((d) => ({
+        label: destinationLabel(d),
+        state: this.encryptionStateOf(d),
+        onTurnOn: () => void this.startEncryptionSetup(mapping, d),
+        onUnlock: () => void this.startEncryptionUnlock(mapping, d),
+        onTurnOff: () => this.startEncryptionDisable(mapping, d),
+      }));
+    if (entries.length === 0) {
+      new Notice("Easy Git: finish the destination (repo and branch) first, then turn on encryption.");
+      return;
+    }
+    new EncryptionStatusModal(this.app, mapping.name, entries).open();
+  }
+
+  private async startEncryptionSetup(
     mapping: FolderMapping,
     destination: MappingDestination,
-  ): void {
+  ): Promise<void> {
     if (this.syncing.has(mapping.id)) {
       new Notice(`Easy Git: "${mapping.name}" is syncing. Try again when it finishes.`);
+      return;
+    }
+    // Another device may have encrypted this remote already. Then the right
+    // step is its passphrase, not a second, conflicting key.
+    let remoteMeta: EncryptionMetadataFile | null;
+    try {
+      remoteMeta = await this.engine.fetchRemoteCryptoMetadata(destination);
+    } catch (e) {
+      new Notice(
+        `Easy Git: could not check the repository before turning on encryption: ${e instanceof Error ? e.message : String(e)}`,
+        8000,
+      );
+      return;
+    }
+    if (remoteMeta) {
+      new Notice(
+        `Easy Git (${mapping.name}): this destination is already encrypted from another device. Enter its passphrase.`,
+        8000,
+      );
+      await this.startEncryptionUnlock(mapping, destination);
       return;
     }
     const hasRemoteHistory =
@@ -967,23 +1031,14 @@ export default class EasyGitPlugin extends Plugin {
     new EncryptionSetupModal(this.app, {
       destinationLabel: destinationLabel(destination),
       hasRemoteHistory,
-      onProvision: async (passphrase) => {
-        const result = await provisionEncryption(passphrase);
-        await this.keychain.store(result.meta.keyId, result.masterKey);
-        this.settings.encryptionMeta = {
-          ...(this.settings.encryptionMeta ?? {}),
-          [result.meta.keyId]: result.meta,
-        };
-        destination.encryption = { keyId: result.meta.keyId };
-        destination.pendingCryptoMetaRemoval = undefined;
-        await this.saveSettings();
-        return bytesToBase64(result.masterKey);
-      },
+      keyStoredInVault: this.keychain.usesFallbackStorage(),
+      onProvision: (passphrase) => enableEncryption(this.lifecycle(), destination, passphrase),
       onDone: () => {
         new Notice(
-          `Easy Git (${mapping.name}): encryption enabled. Syncing now; every file is re-uploaded encrypted.`,
+          `Easy Git (${mapping.name}): encryption is on. Syncing now; every file is re-uploaded encrypted.`,
           8000,
         );
+        this.settingsTab?.refresh();
         void this.syncMapping(mapping.id, "command");
       },
     }).open();
@@ -1012,8 +1067,7 @@ export default class EasyGitPlugin extends Plugin {
     }
     if (!meta) {
       new Notice(
-        "Easy Git: this destination has no encryption metadata on the remote. Use " +
-          '"Set up end-to-end encryption" instead.',
+        "Easy Git: this destination is not encrypted on the remote. Use Turn On instead.",
         8000,
       );
       return;
@@ -1021,24 +1075,18 @@ export default class EasyGitPlugin extends Plugin {
     const metaFile = meta;
     new EncryptionUnlockModal(this.app, {
       destinationLabel: destinationLabel(destination),
-      onUnlock: async (secret, useRecoveryKey) => {
-        const unlocked = useRecoveryKey
-          ? await unlockWithRecoveryKey(metaFile, secret)
-          : await unlockWithPassphrase(metaFile, secret);
-        await this.keychain.store(metaFile.keyId, unlocked.masterKey);
-        this.settings.encryptionMeta = {
-          ...(this.settings.encryptionMeta ?? {}),
-          [metaFile.keyId]: metaFile,
-        };
-        destination.encryption = {
-          keyId: metaFile.keyId,
-          metaUploaded: fromRemote ? true : destination.encryption?.metaUploaded,
-        };
-        destination.pendingCryptoMetaRemoval = undefined;
-        await this.saveSettings();
-      },
+      onUnlock: (secret, useRecoveryKey) =>
+        unlockDestination(
+          this.lifecycle(),
+          destination,
+          metaFile,
+          secret,
+          useRecoveryKey,
+          fromRemote,
+        ),
       onDone: () => {
-        new Notice(`Easy Git (${mapping.name}): destination unlocked. Syncing now.`);
+        new Notice(`Easy Git (${mapping.name}): unlocked on this device. Syncing now.`);
+        this.settingsTab?.refresh();
         void this.syncMapping(mapping.id, "command");
       },
     }).open();
@@ -1053,22 +1101,22 @@ export default class EasyGitPlugin extends Plugin {
       return;
     }
     new ConfirmModal(this.app, {
-      title: "Disable end-to-end encryption?",
+      title: "Turn off end-to-end encryption?",
       message:
         `The next sync re-uploads every file of "${destinationLabel(destination)}" as readable ` +
         "plaintext and removes the encryption metadata file. Anyone with repo access can then " +
         "read the content (encrypted versions remain in git history). The key stays on this " +
-        "device. If other devices pushed recently, sync once before disabling.",
-      confirmText: "Disable and Push Plaintext",
+        "device. If other devices pushed recently, sync once before turning it off.",
+      confirmText: "Turn Off and Push Plaintext",
       destructive: true,
       onConfirm: async () => {
-        destination.encryption = undefined;
-        destination.pendingCryptoMetaRemoval = true;
+        disableEncryption(destination);
         await this.saveSettings();
         new Notice(
-          `Easy Git (${mapping.name}): encryption disabled. Syncing now; files are re-uploaded as plaintext.`,
+          `Easy Git (${mapping.name}): encryption is off. Syncing now; files are re-uploaded as plaintext.`,
           8000,
         );
+        this.settingsTab?.refresh();
         void this.syncMapping(mapping.id, "command");
       },
     }).open();
@@ -1187,6 +1235,8 @@ export default class EasyGitPlugin extends Plugin {
     const level = notificationLevel(this.settings);
     const info = level === "all";
     const explicit = trigger === "manual" || trigger === "command";
+    // One encryption dialog per sync run, even with several destinations.
+    let promptedEncryption = false;
     for (const result of results) {
       const dest = mapping.destinations.find((d) => d.id === result.destinationId);
       const label = showLabel && dest ? ` → ${destinationLabel(dest)}` : "";
@@ -1199,8 +1249,21 @@ export default class EasyGitPlugin extends Plugin {
         explicit,
       );
       if (!result.ok && result.error) {
+        // An explicit sync that needs the passphrase asks for it right away:
+        // that is the whole second-device setup. Automatic syncs never open
+        // dialogs; they only record the failure.
+        const action = explicit ? result.encryptionAction : undefined;
+        if (action === "unlock" && dest && !promptedEncryption) {
+          promptedEncryption = true;
+          void this.startEncryptionUnlock(mapping, dest);
+          continue;
+        }
         if (showFailure) {
           new Notice(`Easy Git (${mapping.name}${label}): ${result.error}`);
+        }
+        if (action === "review" && !promptedEncryption) {
+          promptedEncryption = true;
+          this.openEncryptionModal(mapping.id);
         }
       } else if (result.ok) {
         if (info) {

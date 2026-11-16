@@ -225,6 +225,7 @@ export class SyncEngine {
         destination.encryption.keyId,
       );
       if (!resolved) {
+        baseResult.encryptionAction = "unlock";
         baseResult.error =
           'This destination is encrypted and locked on this device. Run "Easy Git: Unlock encrypted destination…" to enter the passphrase.';
         return baseResult;
@@ -293,6 +294,7 @@ export class SyncEngine {
       remoteCryptoMeta &&
       !destination.pendingCryptoMetaRemoval
     ) {
+      baseResult.encryptionAction = "unlock";
       baseResult.error =
         `This remote folder is end-to-end encrypted (${CRYPTO_METADATA_FILENAME} present). ` +
         'Run "Easy Git: Unlock encrypted destination…" to enter the passphrase.';
@@ -304,6 +306,7 @@ export class SyncEngine {
       await this.deps.saveSettings();
     }
     if (destination.encryption?.metaUploaded && !remoteCryptoMeta) {
+      baseResult.encryptionAction = "review";
       baseResult.error =
         "The encryption metadata file is missing from the remote; encryption may have been " +
         "disabled from another device. If so, disable it here too; otherwise re-enable it for " +
@@ -323,6 +326,7 @@ export class SyncEngine {
         );
         const remoteMeta = parseMetadata(base64ToString(metaBlob.content));
         if (remoteMeta.keyId !== destination.encryption.keyId) {
+          baseResult.encryptionAction = "unlock";
           baseResult.error =
             `The remote is encrypted with a different key (${remoteMeta.keyId.slice(0, 8)}…) ` +
             'than this device is set up for. Run "Easy Git: Unlock encrypted destination…" ' +
@@ -332,6 +336,7 @@ export class SyncEngine {
         destination.encryption.metaUploaded = true;
         await this.deps.saveSettings();
       } else if (mapping.direction === "pull") {
+        baseResult.encryptionAction = "review";
         baseResult.error =
           "This destination is set to encrypt, but the remote has no encryption metadata and a " +
           "pull-only mapping never pushes it. Enable encryption from a device that pushes, or " +
@@ -566,6 +571,7 @@ export class SyncEngine {
     ) {
       const meta = this.deps.settings.encryptionMeta?.[destination.encryption.keyId];
       if (!meta) {
+        baseResult.encryptionAction = "review";
         baseResult.error =
           "Encryption metadata for this destination is missing on this device. " +
           "Disable and re-enable encryption to regenerate it.";

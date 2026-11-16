@@ -297,6 +297,11 @@ export interface SyncResult {
    * history, or a file pushed by another tool). Surfaced as a Notice so
    * mixed content is never silent. */
   plaintextRemoteFiles?: number;
+  /** Set when an encrypted destination needs the user before it can sync.
+   * "unlock": enter the passphrase on this device. "review": this device's
+   * encryption setting disagrees with the remote; open the encryption
+   * dialog. An explicit sync opens the matching dialog right away. */
+  encryptionAction?: "unlock" | "review";
 }
 
 export interface LocalFileEntry {

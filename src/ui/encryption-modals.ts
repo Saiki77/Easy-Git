@@ -1,4 +1,6 @@
 import { App, Modal, Notice, Setting } from "obsidian";
+import type { EncryptionState } from "../crypto/lifecycle";
+import { markButtonDestructive } from "./button-compat";
 
 /**
  * The two encryption dialogs: first-device setup (choose a passphrase, save
@@ -13,6 +15,9 @@ export interface EncryptionSetupOptions {
   /** True when the destination already has synced files, which means the
    * repo's git history keeps their plaintext versions after migration. */
   hasRemoteHistory: boolean;
+  /** True on builds without the system keychain: the key then lives in
+   * the plugin's data.json inside the vault, and the user must know. */
+  keyStoredInVault: boolean;
   /** Generate and persist the key material. Returns the recovery key
    * (base64 master key) for the second screen. Throws to keep the form
    * open with a Notice. */
@@ -53,6 +58,12 @@ export class EncryptionSetupModal extends Modal {
       text:
         "File and folder names stay visible on the remote; file contents do not.",
     });
+    contentEl.createEl("p", {
+      text:
+        "Before you turn it on, update Easy Git to 2.0 or newer on every device that " +
+        "syncs this destination. Older versions download the encrypted files as " +
+        "unreadable data.",
+    });
     if (this.opts.hasRemoteHistory) {
       contentEl.createEl("p", {
         text:
@@ -61,6 +72,15 @@ export class EncryptionSetupModal extends Modal {
           "git history. For a fully clean start, point the destination at a fresh " +
           "repo or branch instead. If other devices pushed recently, sync once " +
           "before enabling.",
+      });
+    }
+
+    if (this.opts.keyStoredInVault) {
+      contentEl.createEl("p", {
+        text:
+          "This Obsidian version has no system keychain, so the key is stored in the " +
+          "plugin's settings file inside this vault. Anyone who can read the vault folder " +
+          "can read the key. Obsidian 1.11.4 or newer keeps it in the system keychain.",
       });
     }
 
@@ -234,5 +254,80 @@ export class EncryptionUnlockModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
     if (this.unlocked) this.opts.onDone();
+  }
+}
+
+export interface EncryptionStatusEntry {
+  /** Which destination, as "owner/repo:branch/folder". */
+  label: string;
+  state: EncryptionState;
+  onTurnOn: () => void;
+  onUnlock: () => void;
+  onTurnOff: () => void;
+}
+
+const STATE_TEXT: Record<EncryptionState, string> = {
+  off: "Off. Files are uploaded as they are.",
+  on: "On. This device has the key, so syncs encrypt and decrypt automatically.",
+  locked: "On, but this device does not have the key yet. Enter the passphrase to sync.",
+};
+
+/**
+ * The one place to manage encryption for a mapping: what it does, the
+ * state of each destination, and the one action that fits that state.
+ * Opened from the mapping list, and by an explicit sync that needs it.
+ */
+export class EncryptionStatusModal extends Modal {
+  constructor(
+    app: App,
+    private mappingName: string,
+    private entries: EncryptionStatusEntry[],
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: `End-to-End Encryption: ${this.mappingName}` });
+    contentEl.createEl("p", {
+      text:
+        "Optional. When it is on, Easy Git encrypts the contents of every file on this " +
+        "device before upload, so the repository host stores only encrypted data. File and " +
+        "folder names stay visible. Your other devices unlock it once with the passphrase.",
+    });
+    for (const entry of this.entries) {
+      new Setting(contentEl)
+        .setName(entry.label)
+        .setDesc(STATE_TEXT[entry.state])
+        .addButton((b) => {
+          if (entry.state === "off") {
+            b.setCta()
+              .setButtonText("Turn On…")
+              .onClick(() => {
+                this.close();
+                entry.onTurnOn();
+              });
+          } else if (entry.state === "locked") {
+            b.setCta()
+              .setButtonText("Unlock…")
+              .onClick(() => {
+                this.close();
+                entry.onUnlock();
+              });
+          } else {
+            markButtonDestructive(b)
+              .setButtonText("Turn Off…")
+              .onClick(() => {
+                this.close();
+                entry.onTurnOff();
+              });
+          }
+        });
+    }
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }

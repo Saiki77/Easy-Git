@@ -41,6 +41,13 @@ export class EasyGitSettingTab extends PluginSettingTab {
     this.render();
   }
 
+  /** Redraw after a change made outside the tab (encryption turned on or
+   * off, a destination unlocked). No-op while the tab is closed: Obsidian
+   * calls display() when it opens. */
+  refresh(): void {
+    if (this.containerEl.isConnected) this.render();
+  }
+
   private render(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -420,6 +427,28 @@ export class EasyGitSettingTab extends PluginSettingTab {
     };
 
     this.mappingRowRefs.set(mapping.id, { syncBtn, statusEl });
+
+    // Optional end-to-end encryption. The label carries the state, so a
+    // device that still needs the passphrase is visible at a glance.
+    const encStates = (mapping.destinations ?? [])
+      .filter((d) => d.repoOwner && d.repoName && d.branch)
+      .map((d) => this.plugin.encryptionStateOf(d));
+    const encBtn = actions.createEl("button", {
+      text: encStates.includes("locked")
+        ? "🔒 Unlock…"
+        : encStates.includes("on")
+          ? "🔒 Encrypted"
+          : "Encrypt…",
+    });
+    if (encStates.includes("locked")) encBtn.addClass("mod-cta");
+    encBtn.setAttr(
+      "title",
+      encStates.length === 0
+        ? "Finish the destination (repo and branch) first."
+        : "Optional end-to-end encryption: file contents are encrypted on this device before upload.",
+    );
+    encBtn.disabled = encStates.length === 0;
+    encBtn.onclick = () => this.plugin.openEncryptionModal(mapping.id);
 
     const editBtn = actions.createEl("button", { text: "Edit" });
     editBtn.onclick = () => this.openMappingModal(mapping);

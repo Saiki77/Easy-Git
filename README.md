@@ -220,11 +220,13 @@ Backups can be auto-pruned. Open **Settings → Easy Git → Backups** and set "
 
 Any destination can be end-to-end encrypted. File contents are encrypted with AES-256-GCM on your device before upload and decrypted after download, so the repo host (GitHub, or your Forgejo server) only ever stores ciphertext. Off by default; destinations without it behave exactly as before, byte for byte.
 
-**Enable:** run `Easy Git: Set up end-to-end encryption for a destination…`, pick the destination, choose a passphrase, and store the recovery key it shows you (a password manager or a printout; anywhere outside the vault). The next sync re-uploads every file encrypted in one commit.
+**Turn it on:** in **Settings → Easy Git**, click **Encrypt…** on the mapping, then **Turn On…**. Choose a passphrase and store the recovery key it shows you once (a password manager or a printout, anywhere outside the vault). The next sync re-uploads every file encrypted in one commit. First update Easy Git to 2.0 on every device that syncs this destination: older versions download the encrypted files as unreadable data.
 
-**Other devices:** configure the same mapping there, then run `Easy Git: Unlock encrypted destination…` and enter the passphrase once. The repo itself carries a small public file, `.easy-git-crypto.json`, with the salt and the passphrase-wrapped key, which is everything another device needs; the passphrase never leaves any device. A sync against an encrypted folder that has not been unlocked stops with a clear error instead of pulling unreadable bytes.
+**Other devices:** set up the same mapping there and click **Sync**. Easy Git sees the encrypted remote and asks for the passphrase (or the recovery key) once. That is all. The repo itself carries a small public file, `.easy-git-crypto.json`, with the salt and the passphrase-wrapped key, which is everything another device needs; the passphrase never leaves any device. Automatic syncs never open a dialog: they stop with a clear error, and the mapping's button reads **🔒 Unlock…** until you enter the passphrase.
 
-**Disable:** `Easy Git: Disable encryption for a destination…` re-uploads everything as plaintext and removes the metadata file.
+**Turn it off:** click **🔒 Encrypted** on the mapping, then **Turn Off…**. The next sync re-uploads everything as plaintext and removes the metadata file. Other devices then show a short notice and turn it off with the same button.
+
+The same actions are in the command palette: `Set up end-to-end encryption…`, `Unlock encrypted destination…`, `Disable encryption…`.
 
 What to know before enabling:
 
