@@ -35,6 +35,8 @@ import {
   secretStorageAvailable,
   writeStoredToken,
 } from "./secret-storage";
+import { TokenStore, authForDisk, authProblem, hydrateAuth } from "./auth-state";
+import { FailureNotifier, notificationLevel, notifyInfo } from "./notifications";
 import { EncryptionKeychain } from "./crypto/keychain";
 import {
   provisionEncryption,
@@ -79,6 +81,7 @@ export default class EasyGitPlugin extends Plugin {
   private pendingAfterSync: Set<string> = new Set();
   private statusBar?: StatusBarIndicator;
   private settingsTab?: EasyGitSettingTab;
+  private failureNotifier = new FailureNotifier();
 
   /** Whether a sync run for this mapping is currently in flight. */
   isSyncing(mappingId: string): boolean {
@@ -287,7 +290,7 @@ export default class EasyGitPlugin extends Plugin {
     }
     if (changed > 0) {
       void this.saveSettings();
-      if (this.settings.showNotifications) {
+      if (notifyInfo(this.settings)) {
         const label = changed === 1 ? "mapping" : "mappings";
         new Notice(`Easy Git: updated ${changed} ${label} for folder rename.`);
       }
@@ -325,10 +328,20 @@ export default class EasyGitPlugin extends Plugin {
       (data as Partial<PluginSettings>) ?? {},
     );
     let dirty = false;
-    // Before healSettings(), which signs the user out when it sees a method
-    // without a token. The token is not in data.json anymore, so it has to be
-    // back in memory by then.
-    if (this.hydrateToken()) dirty = true;
+    // A copy, because hydration mutates it: without data.json, `auth` is
+    // otherwise the shared DEFAULT_SETTINGS object. A missing or corrupted
+    // auth block is rebuilt from defaults.
+    const rawAuth: unknown = this.settings.auth;
+    if (!rawAuth || typeof rawAuth !== "object") {
+      this.settings.auth = { ...DEFAULT_SETTINGS.auth };
+      dirty = true;
+    } else {
+      this.settings.auth = { ...this.settings.auth };
+    }
+    // First, before anything reads auth: the token is not in data.json on
+    // keystore builds, so it has to be back in memory before anyone asks
+    // whether this device is signed in.
+    if (hydrateAuth(this.settings.auth, this.tokenStore())) dirty = true;
     if (this.keychain.promoteFallbackKeys()) dirty = true;
     if (this.migrateLegacyMappings()) dirty = true;
     if (this.healSettings()) dirty = true;
@@ -336,29 +349,23 @@ export default class EasyGitPlugin extends Plugin {
   }
 
   /**
-   * Resolve where the token physically lives and load it into memory.
+   * The physical token storage: the OS keystore on Obsidian 1.11.4+, so a
+   * vault copied to another device, picked up by Obsidian Sync, committed by
+   * another git plugin, or read by any other community plugin carries no
+   * credential; data.json on older builds.
    *
-   * On Obsidian 1.11.4+ it belongs in the OS keystore, so a vault copied to
-   * another device, picked up by Obsidian Sync, committed by another git
-   * plugin, or read by any other community plugin carries no credential.
-   * Older builds keep it in data.json as before.
-   *
-   * The rest of the plugin keeps reading settings.auth.token either way, so
-   * this and persistableSettings() are the only places that know the
-   * difference. Returns true if data.json needs rewriting.
+   * The rest of the plugin keeps reading settings.auth.token either way. The
+   * rules for moving it between memory, keystore and data.json live in
+   * auth-state.ts; this, loadSettings(), persistableSettings() and signOut()
+   * are the only places that wire them up.
    */
-  private hydrateToken(): boolean {
-    if (!secretStorageAvailable(this.app)) return false;
-    const plaintext = this.settings.auth.token;
-    if (plaintext) {
-      // A token written by an older version, or by a downgrade round-trip.
-      // Promote it and let the caller rewrite data.json without it. If the
-      // keystore write fails, leave data.json alone rather than lose it.
-      return writeStoredToken(this.app, plaintext);
-    }
-    const stored = readStoredToken(this.app);
-    if (stored) this.settings.auth.token = stored;
-    return false;
+  private tokenStore(): TokenStore {
+    const app = this.app;
+    return {
+      available: secretStorageAvailable(app),
+      read: () => readStoredToken(app),
+      write: (token) => writeStoredToken(app, token),
+    };
   }
 
   /**
@@ -366,16 +373,21 @@ export default class EasyGitPlugin extends Plugin {
    * the keystore has it, so the credential exists in exactly one place.
    */
   private persistableSettings(): PluginSettings {
-    if (!secretStorageAvailable(this.app)) return this.settings;
-    const token = this.settings.auth.token;
-    if (!token) {
-      // Signed out. Drop the stored secret too, otherwise the next load would
-      // rehydrate the token the user just cleared.
-      clearStoredToken(this.app);
-      return this.settings;
-    }
-    if (!writeStoredToken(this.app, token)) return this.settings;
-    return { ...this.settings, auth: { ...this.settings.auth, token: "" } };
+    const auth = authForDisk(this.settings.auth, this.tokenStore());
+    return auth === this.settings.auth ? this.settings : { ...this.settings, auth };
+  }
+
+  /**
+   * Explicit sign-out on this device: forget the token in memory and in the
+   * keystore, otherwise the next load would rehydrate the token the user
+   * just cleared. This is the only path that blanks the keystore. Other
+   * devices sharing the vault keep their own tokens.
+   */
+  async signOut(): Promise<void> {
+    const { provider, instanceUrl } = this.settings.auth;
+    this.settings.auth = { method: "none", token: "", provider, instanceUrl };
+    clearStoredToken(this.app);
+    await this.saveSettings();
   }
 
   /**
@@ -437,15 +449,10 @@ export default class EasyGitPlugin extends Plugin {
     const s = this.settings;
 
     // --- Auth state ---
-    if (!s.auth || typeof s.auth !== "object") {
-      s.auth = { method: "none", token: "", provider: "github" };
-      dirty = true;
-    }
-    if (s.auth.method !== "none" && !s.auth.token) {
-      // Half-cleared state — treat as signed out, but keep provider/instanceUrl.
-      s.auth = { method: "none", token: "", provider: s.auth.provider, instanceUrl: s.auth.instanceUrl };
-      dirty = true;
-    }
+    // Token and method were already reconciled by hydrateAuth() in
+    // loadSettings(). Do not reset `method` here on a missing token: with
+    // the keystore that only means THIS device has none, and data.json is
+    // shared with devices that do (auth-state.ts, rule 2).
     if (!s.auth.provider || (s.auth.provider !== "github" && s.auth.provider !== "forgejo")) {
       s.auth.provider = "github";
       dirty = true;
@@ -760,7 +767,7 @@ export default class EasyGitPlugin extends Plugin {
       }
       for (const r of results) this.recordSyncResult(mapping, r, trigger);
       await this.saveSettings();
-      this.reportSyncResults(mapping, results);
+      this.reportSyncResults(mapping, results, trigger);
     } finally {
       this.syncing.delete(id);
       this.statusBar?.refresh();
@@ -919,8 +926,9 @@ export default class EasyGitPlugin extends Plugin {
     filter: (d: MappingDestination) => boolean,
     onChoose: (mapping: FolderMapping, destination: MappingDestination) => void,
   ): void {
-    if (this.settings.auth.method === "none" || !this.settings.auth.token) {
-      new Notice("Easy Git: sign in first (settings), then set up encryption.");
+    const problem = authProblem(this.settings.auth);
+    if (problem) {
+      new Notice(`Easy Git: ${problem}`);
       return;
     }
     const choices: DestinationChoice[] = [];
@@ -1133,6 +1141,13 @@ export default class EasyGitPlugin extends Plugin {
     trigger: string,
   ): void {
     const dest = mapping.destinations.find((d) => d.id === result.destinationId);
+    // Drives the status bar's error state and the "Last sync error" line in
+    // the mapping list, the failure signals that stay visible with notices
+    // off (and on mobile, which has no status bar). The engine clears it on
+    // success; a failure has to be recorded here.
+    if (dest && !result.ok) {
+      dest.lastSyncError = result.error ?? "Sync failed.";
+    }
     const entry: SyncLogEntry = {
       timestamp: Date.now(),
       mappingId: mapping.id,
@@ -1166,17 +1181,29 @@ export default class EasyGitPlugin extends Plugin {
   private reportSyncResults(
     mapping: FolderMapping,
     results: SyncResult[],
+    trigger: SyncTrigger,
   ): void {
     const showLabel = mapping.destinations.length > 1;
+    const level = notificationLevel(this.settings);
+    const info = level === "all";
+    const explicit = trigger === "manual" || trigger === "command";
     for (const result of results) {
       const dest = mapping.destinations.find((d) => d.id === result.destinationId);
       const label = showLabel && dest ? ` → ${destinationLabel(dest)}` : "";
+      // Called for every result, success included: a success resets the
+      // notifier's memory of that destination's last announced failure.
+      const showFailure = this.failureNotifier.shouldNotify(
+        level,
+        result.destinationId,
+        result.ok ? undefined : result.error,
+        explicit,
+      );
       if (!result.ok && result.error) {
-        if (this.settings.showNotifications) {
+        if (showFailure) {
           new Notice(`Easy Git (${mapping.name}${label}): ${result.error}`);
         }
       } else if (result.ok) {
-        if (this.settings.showNotifications) {
+        if (info) {
           const total =
             result.added + result.modified + result.deleted + (result.moved ?? 0);
           const summary =
@@ -1186,7 +1213,7 @@ export default class EasyGitPlugin extends Plugin {
                 (result.moved ? ` ${result.moved}→` : "");
           new Notice(`Easy Git (${mapping.name}${label}): ${summary}`);
         }
-        if (result.skippedLarge && result.skippedLarge.length > 0 && this.settings.showNotifications) {
+        if (result.skippedLarge && result.skippedLarge.length > 0 && info) {
           new Notice(
             `Easy Git (${mapping.name}${label}): skipped ${result.skippedLarge.length} file(s) over size limit.`,
           );
@@ -1194,7 +1221,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.unresolvedWikilinks &&
           result.unresolvedWikilinks > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
@@ -1203,7 +1230,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.excalidrawMissingCompanion &&
           result.excalidrawMissingCompanion > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.excalidrawMissingCompanion} Excalidraw drawing(s) have no .svg/.png companion. Enable "Auto-export SVG" in the Excalidraw plugin to render them on GitHub.`,
@@ -1213,7 +1240,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.autoResolvedConflicts &&
           result.autoResolvedConflicts > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.autoResolvedConflicts} conflict(s) auto-resolved — local was newer than last sync.`,
@@ -1223,7 +1250,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.mergedConflicts &&
           result.mergedConflicts > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.mergedConflicts} conflict(s) merged automatically via 3-way diff.`,
@@ -1233,7 +1260,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.plaintextRemoteFiles &&
           result.plaintextRemoteFiles > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.plaintextRemoteFiles} remote file(s) were not encrypted and were pulled as-is. The next sync re-uploads them encrypted.`,
@@ -1243,7 +1270,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.backupsCreated &&
           result.backupsCreated > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): backed up ${result.backupsCreated} local file(s) to ${result.backupFolder ?? ".easy-git-backup/"} before overwrite.`,
@@ -1264,7 +1291,7 @@ export default class EasyGitPlugin extends Plugin {
         if (result.mathMacrosRewritten && result.mathMacrosRewritten > 0) {
           ghParts.push(`${result.mathMacrosRewritten} math macro${result.mathMacrosRewritten === 1 ? "" : "s"}`);
         }
-        if (ghParts.length > 0 && this.settings.showNotifications) {
+        if (ghParts.length > 0 && info) {
           new Notice(
             `Easy Git (${mapping.name}${label}): rewrote ${ghParts.join(", ")} for GitHub rendering (reversible on pull).`,
             6000,

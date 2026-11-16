@@ -55,7 +55,7 @@ Either works for private repos.
 - **Fine-grained Personal Access Token (recommended).** The only method that can be limited to exactly the repos you sync. Create one at [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens), choose **Only select repositories**, and grant `Contents: Read and write` (the required `Metadata: Read` is added automatically). Paste it in settings, hit **Test connection**. The repo picker then lists only the repos the token can reach. Classic tokens with the `repo` scope keep working.
 - **Sign in with GitHub.** Click the button, enter the one-time code on github.com, the plugin picks up the token automatically. One caveat: this is a classic OAuth flow, and GitHub offers no per-repository scope for it, so the token can access every repo on your account. If that is too broad, use a fine-grained token instead; converting the sign-in to a GitHub App (which supports per-repo installation) is under consideration.
 
-**Where your token lives.** On Obsidian 1.11.4 and newer, Easy Git stores it in your operating system's keychain rather than in the plugin's settings file, so it never travels with the vault and other plugins can't read it. That also means it is per device: if you use the same vault on a laptop and a phone, sign in once on each. Older Obsidian builds keep the token in `data.json` as before. An existing token is moved into the keychain automatically the first time you run this version.
+**Where your token lives.** On Obsidian 1.11.4 and newer, Easy Git stores it in your operating system's keychain rather than in the plugin's settings file, so it never travels with the vault and other plugins can't read it. That also means it is per device: if you use the same vault on a laptop and a phone, sign in once on each. A device without its own token shows **Not signed in on this device**, and signing in or out on one device never signs another one in or out, even when a sync tool shares the plugin's settings between them. Older Obsidian builds keep the token in `data.json` as before. An existing token is moved into the keychain automatically the first time you run this version.
 
 ## Add a folder mapping
 
@@ -291,6 +291,16 @@ A small indicator sits in Obsidian's bottom-right status bar showing the aggrega
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
 
+## Notifications
+
+**Settings → Easy Git → Notifications** sets which pop-ups appear after a sync:
+
+- **All** (default): a summary after every sync, plus every warning and error.
+- **Errors only**: a pop-up only when a sync fails. A sync you start yourself always reports its failure; an automatic one (interval, on save, startup) reports each distinct failure once per session, so an expired token does not interrupt you after every save. Useful on mobile with sync on save.
+- **Off**: no pop-ups.
+
+Whatever you pick, a failed sync stays visible until the next successful one: in the status bar (`! Easy Git error`, desktop) and as **Last sync error** next to the mapping in the settings list (desktop and mobile).
+
 ## Self-healing
 
 Easy Git tries hard to keep working even when settings drift, get hand-edited, or carry state from an older version:
@@ -312,7 +322,7 @@ The settings tab is grouped into foldable sections so you can collapse the parts
 - **Backups** — retention window and link to the backup folder
 - **Sync behaviour** — commit message template, max file size
 - **Excluded paths** — global glob list (per-mapping uses `.easygitignore`)
-- **Notifications & diagnostics** — Notice toggle, debug logging, sync log
+- **Notifications & diagnostics** — notification level (all, errors only, off), debug logging, sync log
 - **About** — version, source, license
 
 All three conflict layers (mtime auto-resolve, 3-way merge, the modal) and the backup mechanism are still on by default; the new toggles only exist for the rare case where you want to disable one.

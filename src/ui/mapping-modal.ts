@@ -2,6 +2,7 @@ import { App, Modal, Notice, Setting, TFolder } from "obsidian";
 import { GitHubClient } from "../github/client";
 import { getRepo } from "../github/git-data";
 import { describeAuthError } from "../github/auth";
+import { authProblem } from "../auth-state";
 import {
   AutoMode,
   FolderMapping,
@@ -75,7 +76,7 @@ export class EditMappingModal extends Modal {
     }
     this.vaultFolderPicked = !this.isNew;
     this.client =
-      opts.auth.method !== "none" && opts.auth.token
+      authProblem(opts.auth) === null
         ? new GitHubClient({ token: opts.auth.token, baseUrl: resolveApiBase(opts.auth) })
         : null;
   }
