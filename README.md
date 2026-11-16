@@ -22,6 +22,16 @@
 
 Obsidian's built-in Sync covers your whole vault. Easy Git is for the case where you want to share only one or two folders with a repo: a notes folder you keep public, course material you collaborate on, a snippets section you want backed up under version control. You pick the folder, you pick the repo, you pick the direction. That's it.
 
+## New features
+
+- **2.0: End-to-end encryption (optional).** Easy Git can encrypt file contents on your device before upload, so the repository host stores only encrypted data. Turn it on per mapping with **Encrypt…** in the settings; your other devices ask for the passphrase on their first sync. [Details](#end-to-end-encryption-optional)
+- **1.10: Notification levels.** Choose **All**, **Errors only** or **Off**. A failed sync now stays visible in the status bar and next to the mapping until the next good sync, whatever you choose. [Details](#notifications)
+- **1.9: Moves shown as moves.** A renamed or moved file appears as `old → new` in the commit message, the notice and the sync log. On Forgejo/Gitea 1.18+ each sync is one atomic commit.
+- **1.8: Prune local-only files.** Clean up vault files that are left behind after files were moved or renamed on the remote, with a preview and a backup first. [Details](#pruning-local-only-files)
+- **1.7: Token in the system keychain.** Your access token is kept in the operating system's keychain, not in the vault. [Details](#sign-in)
+
+All versions and their changes: [Releases](../../releases).
+
 ## Sync providers
 
 Easy Git started life as a GitHub plugin and now also syncs to self-hosted **Forgejo / Gitea** instances. Pick the provider under **Settings → Easy Git → Authentication**; everything else (mappings, directions, conflict handling, backups, the markdown transforms) works the same no matter where your repos live. On Forgejo/Gitea 1.18+ each sync lands as one atomic commit through the batch contents API, so the server renders moved files as renames; older servers fall back to one commit per file.
@@ -32,21 +42,6 @@ Whatever the provider, Easy Git holds to the same simple spirit:
 2. **Linking an individual folder is just as easy.** Pick a vault folder, pick a repo, branch, and path, pick a direction. Nothing about the underlying provider shows up in that flow.
 
 If you'd like Easy Git to reach another host such as GitLab, Bitbucket, or a different self-hosted server, that's very welcome as long as it keeps both of those true. The extension points are documented in [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-sync-provider).
-
-## Install
-
-**From inside Obsidian** (recommended)
-
-1. Settings → Community plugins → **Browse**.
-2. Search **Easy Git** and click **Install**, then **Enable**.
-
-**Via BRAT** (for early-access builds between releases)
-
-1. Install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) plugin.
-2. BRAT settings → **Add Beta Plugin** → paste `Saiki77/Easy-Git`.
-3. Enable **Easy Git** under Settings → Community plugins.
-
-**Manual:** download `main.js`, `manifest.json`, `styles.css` from the [latest release](../../releases) into `<your vault>/.obsidian/plugins/easy-git/`.
 
 ## Sign in
 
