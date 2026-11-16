@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import { EASY_GIT_OAUTH_CLIENT_ID, GitHubAuth } from "../types";
+import { isSignedIn } from "../auth-state";
 import { GitHubClient, GitHubApiError } from "./client";
 
 export interface UserInfo {
@@ -103,11 +104,16 @@ export async function pollDeviceToken(
 }
 
 export function describeAuth(auth: GitHubAuth): string {
-  if (auth.method === "none" || !auth.token) return "Not signed in";
+  if (!isSignedIn(auth)) {
+    // A method without a token: data.json says some device signed in, but
+    // this one has no token in its keystore.
+    return auth.method !== "none"
+      ? "Not signed in on this device (tokens are stored per device)"
+      : "Not signed in";
+  }
   const who = auth.username ? ` as ${auth.username}` : "";
-  if (auth.method === "pat") return `Signed in via PAT${who}`;
   if (auth.method === "oauth") return `Signed in via GitHub${who}`;
-  return "Not signed in";
+  return `Signed in via PAT${who}`;
 }
 
 export function describeAuthError(e: unknown): string {

@@ -35,6 +35,7 @@ import {
   secretStorageAvailable,
   writeStoredToken,
 } from "./secret-storage";
+import { TokenStore, authForDisk, hydrateAuth } from "./auth-state";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
@@ -266,39 +267,43 @@ export default class EasyGitPlugin extends Plugin {
       (data as Partial<PluginSettings>) ?? {},
     );
     let dirty = false;
-    // Before healSettings(), which signs the user out when it sees a method
-    // without a token. The token is not in data.json anymore, so it has to be
-    // back in memory by then.
-    if (this.hydrateToken()) dirty = true;
+    // A copy, because hydration mutates it: without data.json, `auth` is
+    // otherwise the shared DEFAULT_SETTINGS object. A missing or corrupted
+    // auth block is rebuilt from defaults.
+    const rawAuth: unknown = this.settings.auth;
+    if (!rawAuth || typeof rawAuth !== "object") {
+      this.settings.auth = { ...DEFAULT_SETTINGS.auth };
+      dirty = true;
+    } else {
+      this.settings.auth = { ...this.settings.auth };
+    }
+    // First, before anything reads auth: the token is not in data.json on
+    // keystore builds, so it has to be back in memory before anyone asks
+    // whether this device is signed in.
+    if (hydrateAuth(this.settings.auth, this.tokenStore())) dirty = true;
     if (this.migrateLegacyMappings()) dirty = true;
     if (this.healSettings()) dirty = true;
     if (dirty) await this.saveSettings();
   }
 
   /**
-   * Resolve where the token physically lives and load it into memory.
+   * The physical token storage: the OS keystore on Obsidian 1.11.4+, so a
+   * vault copied to another device, picked up by Obsidian Sync, committed by
+   * another git plugin, or read by any other community plugin carries no
+   * credential; data.json on older builds.
    *
-   * On Obsidian 1.11.4+ it belongs in the OS keystore, so a vault copied to
-   * another device, picked up by Obsidian Sync, committed by another git
-   * plugin, or read by any other community plugin carries no credential.
-   * Older builds keep it in data.json as before.
-   *
-   * The rest of the plugin keeps reading settings.auth.token either way, so
-   * this and persistableSettings() are the only places that know the
-   * difference. Returns true if data.json needs rewriting.
+   * The rest of the plugin keeps reading settings.auth.token either way. The
+   * rules for moving it between memory, keystore and data.json live in
+   * auth-state.ts; this, loadSettings(), persistableSettings() and signOut()
+   * are the only places that wire them up.
    */
-  private hydrateToken(): boolean {
-    if (!secretStorageAvailable(this.app)) return false;
-    const plaintext = this.settings.auth.token;
-    if (plaintext) {
-      // A token written by an older version, or by a downgrade round-trip.
-      // Promote it and let the caller rewrite data.json without it. If the
-      // keystore write fails, leave data.json alone rather than lose it.
-      return writeStoredToken(this.app, plaintext);
-    }
-    const stored = readStoredToken(this.app);
-    if (stored) this.settings.auth.token = stored;
-    return false;
+  private tokenStore(): TokenStore {
+    const app = this.app;
+    return {
+      available: secretStorageAvailable(app),
+      read: () => readStoredToken(app),
+      write: (token) => writeStoredToken(app, token),
+    };
   }
 
   /**
@@ -306,16 +311,21 @@ export default class EasyGitPlugin extends Plugin {
    * the keystore has it, so the credential exists in exactly one place.
    */
   private persistableSettings(): PluginSettings {
-    if (!secretStorageAvailable(this.app)) return this.settings;
-    const token = this.settings.auth.token;
-    if (!token) {
-      // Signed out. Drop the stored secret too, otherwise the next load would
-      // rehydrate the token the user just cleared.
-      clearStoredToken(this.app);
-      return this.settings;
-    }
-    if (!writeStoredToken(this.app, token)) return this.settings;
-    return { ...this.settings, auth: { ...this.settings.auth, token: "" } };
+    const auth = authForDisk(this.settings.auth, this.tokenStore());
+    return auth === this.settings.auth ? this.settings : { ...this.settings, auth };
+  }
+
+  /**
+   * Explicit sign-out on this device: forget the token in memory and in the
+   * keystore, otherwise the next load would rehydrate the token the user
+   * just cleared. This is the only path that blanks the keystore. Other
+   * devices sharing the vault keep their own tokens.
+   */
+  async signOut(): Promise<void> {
+    const { provider, instanceUrl } = this.settings.auth;
+    this.settings.auth = { method: "none", token: "", provider, instanceUrl };
+    clearStoredToken(this.app);
+    await this.saveSettings();
   }
 
   /**
@@ -377,15 +387,10 @@ export default class EasyGitPlugin extends Plugin {
     const s = this.settings;
 
     // --- Auth state ---
-    if (!s.auth || typeof s.auth !== "object") {
-      s.auth = { method: "none", token: "", provider: "github" };
-      dirty = true;
-    }
-    if (s.auth.method !== "none" && !s.auth.token) {
-      // Half-cleared state — treat as signed out, but keep provider/instanceUrl.
-      s.auth = { method: "none", token: "", provider: s.auth.provider, instanceUrl: s.auth.instanceUrl };
-      dirty = true;
-    }
+    // Token and method were already reconciled by hydrateAuth() in
+    // loadSettings(). Do not reset `method` here on a missing token: with
+    // the keystore that only means THIS device has none, and data.json is
+    // shared with devices that do (auth-state.ts, rule 2).
     if (!s.auth.provider || (s.auth.provider !== "github" && s.auth.provider !== "forgejo")) {
       s.auth.provider = "github";
       dirty = true;

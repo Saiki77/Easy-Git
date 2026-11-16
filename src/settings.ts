@@ -11,8 +11,9 @@ import {
   describeAuthError,
   getAuthenticatedUser,
 } from "./github/auth";
-import { authConfigError, resolveApiBase } from "./types";
+import { resolveApiBase } from "./types";
 import { secretStorageAvailable } from "./secret-storage";
+import { authProblem } from "./auth-state";
 
 interface MappingRowRefs {
   syncBtn: HTMLButtonElement;
@@ -220,13 +221,18 @@ export class EasyGitSettingTab extends PluginSettingTab {
         t.setPlaceholder(isGitHub ? "github_pat_... or ghp_..." : "Forgejo token")
           .setValue(auth.method === "pat" ? auth.token : "")
           .onChange(async (v) => {
-            this.plugin.settings.auth = {
-              ...this.plugin.settings.auth,
-              method: v ? "pat" : "none",
-              token: v,
-              username: undefined,
-            };
-            await this.plugin.saveSettings();
+            if (v) {
+              this.plugin.settings.auth = {
+                ...this.plugin.settings.auth,
+                method: "pat",
+                token: v,
+                username: undefined,
+              };
+              await this.plugin.saveSettings();
+            } else {
+              // An emptied field is an explicit sign-out on this device.
+              await this.plugin.signOut();
+            }
             status.setText(describeAuth(this.plugin.settings.auth));
           });
       });
@@ -265,13 +271,10 @@ export class EasyGitSettingTab extends PluginSettingTab {
       .setDesc("Verifies the current token works.")
       .addButton((b) =>
         b.setButtonText("Test").onClick(async () => {
-          if (!this.plugin.settings.auth.token) {
-            new Notice("Easy Git: no token configured.");
-            return;
-          }
-          const cfgError = authConfigError(this.plugin.settings.auth);
-          if (cfgError) {
-            new Notice("Easy Git: " + cfgError);
+          // The same check sync uses, so a passing test means sync can run.
+          const problem = authProblem(this.plugin.settings.auth);
+          if (problem) {
+            new Notice("Easy Git: " + problem);
             return;
           }
           try {
@@ -296,18 +299,12 @@ export class EasyGitSettingTab extends PluginSettingTab {
 
     new Setting(parent)
       .setName("Clear credentials")
-      .setDesc("Removes the stored token.")
+      .setDesc("Removes the stored token from this device.")
       .addButton((b) =>
         markButtonDestructive(b)
           .setButtonText("Clear")
           .onClick(async () => {
-            this.plugin.settings.auth = {
-              method: "none",
-              token: "",
-              provider: this.plugin.settings.auth.provider,
-              instanceUrl: this.plugin.settings.auth.instanceUrl,
-            };
-            await this.plugin.saveSettings();
+            await this.plugin.signOut();
             status.setText(describeAuth(this.plugin.settings.auth));
             new Notice("Easy Git: credentials cleared.");
             this.render();

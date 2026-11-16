@@ -5,6 +5,7 @@ import {
   listRemoteFolderFiles,
 } from "../github/git-data";
 import { describeAuthError, getAuthenticatedUser } from "../github/auth";
+import { authProblem } from "../auth-state";
 import {
   FolderMapping,
   LocalFileEntry,
@@ -177,7 +178,8 @@ export class DiagnoseModal extends Modal {
       scopes: settings.auth.scopes,
     };
     let client: GitHubClient | null = null;
-    if (settings.auth.method !== "none" && settings.auth.token) {
+    const authBlocker = authProblem(settings.auth);
+    if (!authBlocker) {
       client = new GitHubClient({ token: settings.auth.token, baseUrl: resolveApiBase(settings.auth) });
       try {
         const user = await getAuthenticatedUser(client);
@@ -187,7 +189,7 @@ export class DiagnoseModal extends Modal {
         fetchErrors.push("Auth check failed: " + auth.tokenError);
       }
     } else {
-      auth.tokenError = "no token configured";
+      auth.tokenError = authBlocker;
     }
 
     // Branch + remote scan (live; cache-busted by 1.4.5).
