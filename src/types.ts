@@ -1,5 +1,7 @@
 export type SyncDirection = "push" | "pull" | "both";
 
+export type NotificationLevel = "all" | "errors" | "off";
+
 export type AutoMode =
   | { kind: "off" }
   | { kind: "interval"; minutes: number }
@@ -128,7 +130,13 @@ export interface PluginSettings {
   defaultCommitTemplate: string;
   excludedPaths: string[];
   maxFileSizeBytes: number;
+  /** Legacy on/off switch. Kept in step with notificationLevel ("off" →
+   * false) so a downgrade to a version without levels still behaves. */
   showNotifications: boolean;
+  /** Which sync notices to show. Undefined on settings saved before levels
+   * existed; always read it through notificationLevel() in
+   * notifications.ts, which falls back to showNotifications. */
+  notificationLevel?: NotificationLevel;
   debugLogging: boolean;
   /** Auto-resolve `both-edited` conflicts when local mtime is decisively
    * newer than what was recorded at last sync. Default: true. */

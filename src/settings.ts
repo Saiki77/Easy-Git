@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, ToggleComponent } from "obsidian";
 import type EasyGitPlugin from "./main";
-import { FolderMapping } from "./types";
+import { FolderMapping, NotificationLevel } from "./types";
 import { EditMappingModal } from "./ui/mapping-modal";
 import { DeviceFlowModal } from "./ui/device-flow-modal";
 import { ConfirmModal } from "./ui/confirm-modal";
@@ -14,6 +14,7 @@ import {
 import { resolveApiBase } from "./types";
 import { secretStorageAvailable } from "./secret-storage";
 import { authProblem } from "./auth-state";
+import { notificationLevel } from "./notifications";
 
 interface MappingRowRefs {
   syncBtn: HTMLButtonElement;
@@ -610,13 +611,20 @@ export class EasyGitSettingTab extends PluginSettingTab {
 
   private renderDiagnosticsSection(parent: HTMLElement): void {
     new Setting(parent)
-      .setName("Show notifications")
-      .setDesc("Show a Notice after each sync run.")
-      .addToggle((t) =>
-        t
-          .setValue(this.plugin.settings.showNotifications)
+      .setName("Notifications")
+      .setDesc(
+        "Which pop-ups to show after a sync. Errors only: a pop-up when a sync fails, nothing on success. Whatever you pick, a failed sync also shows in the status bar and next to the mapping in this list.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOption("all", "All")
+          .addOption("errors", "Errors only")
+          .addOption("off", "Off")
+          .setValue(notificationLevel(this.plugin.settings))
           .onChange(async (v) => {
-            this.plugin.settings.showNotifications = v;
+            const level = v as NotificationLevel;
+            this.plugin.settings.notificationLevel = level;
+            this.plugin.settings.showNotifications = level !== "off";
             await this.plugin.saveSettings();
           }),
       );

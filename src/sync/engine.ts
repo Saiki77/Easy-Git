@@ -13,6 +13,7 @@ import {
   resolveApiBase,
 } from "../types";
 import { authProblem } from "../auth-state";
+import { notifyInfo } from "../notifications";
 import { GitHubClient, GitHubApiError } from "../github/client";
 import {
   BatchFileOperation,
@@ -223,7 +224,7 @@ export class SyncEngine {
       destination.remoteFolder = remoteScan.correctedPath;
       await this.deps.saveSettings();
     }
-    if (remoteScan.truncatedFallback && this.deps.settings.showNotifications) {
+    if (remoteScan.truncatedFallback && notifyInfo(this.deps.settings)) {
       new Notice(
         `Easy Git (${mapping.name}): the ${destination.repoOwner}/${destination.repoName} ` +
           `tree is large enough that GitHub truncated the recursive listing. ` +
@@ -247,7 +248,7 @@ export class SyncEngine {
     ) {
       mapping.rewriteWikilinks = true;
       mapping.rewriteWikilinksMigrated = true;
-      if (this.deps.settings.showNotifications) {
+      if (notifyInfo(this.deps.settings)) {
         new Notice(
           `Easy Git (${mapping.name}): wikilinks will be rewritten to standard Markdown so GitHub renders images. This first sync touches every .md in the mapping.`,
           8000,
@@ -522,7 +523,7 @@ export class SyncEngine {
     const destLabel = destinationLabel(destination);
     if (mapping.direction === "push" && plan.informationalRemoteChanges.length > 0) {
       const n = plan.informationalRemoteChanges.length;
-      if (this.deps.settings.showNotifications) {
+      if (notifyInfo(this.deps.settings)) {
         new Notice(
           `Easy Git (${mapping.name} → ${destLabel}): ${n} file${n === 1 ? "" : "s"} changed on remote (not pulled — push-only mapping).`,
         );
@@ -530,7 +531,7 @@ export class SyncEngine {
     }
     if (mapping.direction === "pull" && plan.informationalLocalChanges.length > 0) {
       const n = plan.informationalLocalChanges.length;
-      if (this.deps.settings.showNotifications) {
+      if (notifyInfo(this.deps.settings)) {
         new Notice(
           `Easy Git (${mapping.name} → ${destLabel}): ${n} file${n === 1 ? "" : "s"} changed locally (not pushed — pull-only mapping).`,
         );

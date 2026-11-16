@@ -6,10 +6,12 @@ import {
 } from "../github/git-data";
 import { describeAuthError, getAuthenticatedUser } from "../github/auth";
 import { authProblem } from "../auth-state";
+import { notificationLevel } from "../notifications";
 import {
   FolderMapping,
   LocalFileEntry,
   MappingDestination,
+  NotificationLevel,
   PluginSettings,
   RemoteFileEntry,
   SyncLogEntry,
@@ -105,7 +107,7 @@ interface DiagnosticReport {
     autoResolveByMtime: boolean;
     autoMergeText: boolean;
     backupRetentionDays: number;
-    showNotifications: boolean;
+    notifications: NotificationLevel;
     debugLogging: boolean;
   };
   syncLogTail: SyncLogEntry[];
@@ -332,7 +334,7 @@ export class DiagnoseModal extends Modal {
         autoResolveByMtime: settings.autoResolveByMtime !== false,
         autoMergeText: settings.autoMergeText !== false,
         backupRetentionDays: settings.backupRetentionDays ?? 0,
-        showNotifications: settings.showNotifications,
+        notifications: notificationLevel(settings),
         debugLogging: settings.debugLogging,
       },
       syncLogTail: (settings.syncLog ?? [])
@@ -686,7 +688,7 @@ export class DiagnoseModal extends Modal {
         r.settings.backupRetentionDays > 0
           ? String(r.settings.backupRetentionDays)
           : "keep all",
-      Notifications: String(r.settings.showNotifications),
+      Notifications: r.settings.notifications,
       "Debug logging": String(r.settings.debugLogging),
     });
     if (r.settings.excludedPathsGlobal.length > 0) {
@@ -965,7 +967,7 @@ export class DiagnoseModal extends Modal {
         ? String(r.settings.backupRetentionDays)
         : "keep all",
     );
-    kv("Notifications", String(r.settings.showNotifications));
+    kv("Notifications", r.settings.notifications);
     kv("Debug logging", String(r.settings.debugLogging));
     lines.push("");
 

@@ -36,6 +36,7 @@ import {
   writeStoredToken,
 } from "./secret-storage";
 import { TokenStore, authForDisk, hydrateAuth } from "./auth-state";
+import { FailureNotifier, notificationLevel, notifyInfo } from "./notifications";
 
 type SyncTrigger = "manual" | "interval" | "startup" | "on-save" | "command";
 
@@ -66,6 +67,7 @@ export default class EasyGitPlugin extends Plugin {
   private pendingAfterSync: Set<string> = new Set();
   private statusBar?: StatusBarIndicator;
   private settingsTab?: EasyGitSettingTab;
+  private failureNotifier = new FailureNotifier();
 
   /** Whether a sync run for this mapping is currently in flight. */
   isSyncing(mappingId: string): boolean {
@@ -229,7 +231,7 @@ export default class EasyGitPlugin extends Plugin {
     }
     if (changed > 0) {
       void this.saveSettings();
-      if (this.settings.showNotifications) {
+      if (notifyInfo(this.settings)) {
         const label = changed === 1 ? "mapping" : "mappings";
         new Notice(`Easy Git: updated ${changed} ${label} for folder rename.`);
       }
@@ -698,7 +700,7 @@ export default class EasyGitPlugin extends Plugin {
       }
       for (const r of results) this.recordSyncResult(mapping, r, trigger);
       await this.saveSettings();
-      this.reportSyncResults(mapping, results);
+      this.reportSyncResults(mapping, results, trigger);
     } finally {
       this.syncing.delete(id);
       this.statusBar?.refresh();
@@ -912,6 +914,13 @@ export default class EasyGitPlugin extends Plugin {
     trigger: string,
   ): void {
     const dest = mapping.destinations.find((d) => d.id === result.destinationId);
+    // Drives the status bar's error state and the "Last sync error" line in
+    // the mapping list, the failure signals that stay visible with notices
+    // off (and on mobile, which has no status bar). The engine clears it on
+    // success; a failure has to be recorded here.
+    if (dest && !result.ok) {
+      dest.lastSyncError = result.error ?? "Sync failed.";
+    }
     const entry: SyncLogEntry = {
       timestamp: Date.now(),
       mappingId: mapping.id,
@@ -945,17 +954,29 @@ export default class EasyGitPlugin extends Plugin {
   private reportSyncResults(
     mapping: FolderMapping,
     results: SyncResult[],
+    trigger: SyncTrigger,
   ): void {
     const showLabel = mapping.destinations.length > 1;
+    const level = notificationLevel(this.settings);
+    const info = level === "all";
+    const explicit = trigger === "manual" || trigger === "command";
     for (const result of results) {
       const dest = mapping.destinations.find((d) => d.id === result.destinationId);
       const label = showLabel && dest ? ` → ${destinationLabel(dest)}` : "";
+      // Called for every result, success included: a success resets the
+      // notifier's memory of that destination's last announced failure.
+      const showFailure = this.failureNotifier.shouldNotify(
+        level,
+        result.destinationId,
+        result.ok ? undefined : result.error,
+        explicit,
+      );
       if (!result.ok && result.error) {
-        if (this.settings.showNotifications) {
+        if (showFailure) {
           new Notice(`Easy Git (${mapping.name}${label}): ${result.error}`);
         }
       } else if (result.ok) {
-        if (this.settings.showNotifications) {
+        if (info) {
           const total =
             result.added + result.modified + result.deleted + (result.moved ?? 0);
           const summary =
@@ -965,7 +986,7 @@ export default class EasyGitPlugin extends Plugin {
                 (result.moved ? ` ${result.moved}→` : "");
           new Notice(`Easy Git (${mapping.name}${label}): ${summary}`);
         }
-        if (result.skippedLarge && result.skippedLarge.length > 0 && this.settings.showNotifications) {
+        if (result.skippedLarge && result.skippedLarge.length > 0 && info) {
           new Notice(
             `Easy Git (${mapping.name}${label}): skipped ${result.skippedLarge.length} file(s) over size limit.`,
           );
@@ -973,7 +994,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.unresolvedWikilinks &&
           result.unresolvedWikilinks > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.unresolvedWikilinks} unresolved wikilink(s) left untouched.`,
@@ -982,7 +1003,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.excalidrawMissingCompanion &&
           result.excalidrawMissingCompanion > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.excalidrawMissingCompanion} Excalidraw drawing(s) have no .svg/.png companion. Enable "Auto-export SVG" in the Excalidraw plugin to render them on GitHub.`,
@@ -992,7 +1013,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.autoResolvedConflicts &&
           result.autoResolvedConflicts > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.autoResolvedConflicts} conflict(s) auto-resolved — local was newer than last sync.`,
@@ -1002,7 +1023,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.mergedConflicts &&
           result.mergedConflicts > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): ${result.mergedConflicts} conflict(s) merged automatically via 3-way diff.`,
@@ -1012,7 +1033,7 @@ export default class EasyGitPlugin extends Plugin {
         if (
           result.backupsCreated &&
           result.backupsCreated > 0 &&
-          this.settings.showNotifications
+          info
         ) {
           new Notice(
             `Easy Git (${mapping.name}${label}): backed up ${result.backupsCreated} local file(s) to ${result.backupFolder ?? ".easy-git-backup/"} before overwrite.`,
@@ -1033,7 +1054,7 @@ export default class EasyGitPlugin extends Plugin {
         if (result.mathMacrosRewritten && result.mathMacrosRewritten > 0) {
           ghParts.push(`${result.mathMacrosRewritten} math macro${result.mathMacrosRewritten === 1 ? "" : "s"}`);
         }
-        if (ghParts.length > 0 && this.settings.showNotifications) {
+        if (ghParts.length > 0 && info) {
           new Notice(
             `Easy Git (${mapping.name}${label}): rewrote ${ghParts.join(", ")} for GitHub rendering (reversible on pull).`,
             6000,

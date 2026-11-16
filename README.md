@@ -273,6 +273,16 @@ A small indicator sits in Obsidian's bottom-right status bar showing the aggrega
 
 Click it to jump straight to Easy Git's settings. Hidden when you have no mappings configured.
 
+## Notifications
+
+**Settings → Easy Git → Notifications** sets which pop-ups appear after a sync:
+
+- **All** (default): a summary after every sync, plus every warning and error.
+- **Errors only**: a pop-up only when a sync fails. A sync you start yourself always reports its failure; an automatic one (interval, on save, startup) reports each distinct failure once per session, so an expired token does not interrupt you after every save. Useful on mobile with sync on save.
+- **Off**: no pop-ups.
+
+Whatever you pick, a failed sync stays visible until the next successful one: in the status bar (`! Easy Git error`, desktop) and as **Last sync error** next to the mapping in the settings list (desktop and mobile).
+
 ## Self-healing
 
 Easy Git tries hard to keep working even when settings drift, get hand-edited, or carry state from an older version:
@@ -294,7 +304,7 @@ The settings tab is grouped into foldable sections so you can collapse the parts
 - **Backups** — retention window and link to the backup folder
 - **Sync behaviour** — commit message template, max file size
 - **Excluded paths** — global glob list (per-mapping uses `.easygitignore`)
-- **Notifications & diagnostics** — Notice toggle, debug logging, sync log
+- **Notifications & diagnostics** — notification level (all, errors only, off), debug logging, sync log
 - **About** — version, source, license
 
 All three conflict layers (mtime auto-resolve, 3-way merge, the modal) and the backup mechanism are still on by default; the new toggles only exist for the rare case where you want to disable one.
